@@ -14,6 +14,7 @@
 #   eval-debug       - Small set of loglikelihood and generative benchmarks to test eval script
 #   single           - Run a single task (requires --task <task_name>)
 #   non-gated        - Subset of default with non swiss-ai gated datasets (todo: full access)
+#   gated            - Subset of tasks that are swiss-ai gated datasets
 
 #
 # Olmo3:
@@ -45,6 +46,7 @@
 #   --backend <backend>  - lm-eval backend: hf, vllm, megatron_lm (default: from sbatch script)
 #   --splits K           - Split tasks across K parallel nodes per model
 #   --limit N            - Optional argument to pass as --limit to the lm-evaluation-harness, to limit the number of samples per task (default: no limit).
+#   --harness-branch B   - Install lm-evaluation-harness from branch/ref B (default: repo default branch)
 #
 # Examples:
 #   # Single HF model, auto-detect everything
@@ -83,6 +85,7 @@ FEWSHOT_FLAG=""
 HARNESS_LIMIT=""
 MEGATRON_ITER=""
 SINGLE_TASK=""
+HARNESS_BRANCH=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -99,6 +102,7 @@ while [[ $# -gt 0 ]]; do
         --backend)      BACKEND_FLAG="$2";            shift 2 ;;
         --megatron-iter) MEGATRON_ITER="$2";            shift 2 ;;
         --limit) HARNESS_LIMIT="$2";            shift 2 ;;
+        --harness-branch) HARNESS_BRANCH="$2";        shift 2 ;;
         *)
             echo "Error: Unknown option '$1'"
             echo "Run with no arguments for usage."
@@ -108,7 +112,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- Validate mode ---
-VALID_MODES=("default" "multi-lingual" "apertus-previous" "olmo-easy" "olmo-main" "olmo-heldout" "olmo-safety" "olmo-longcontext" "olmo-complete" "eval-debug" non-gated "single")
+VALID_MODES=("default" "multi-lingual" "apertus-previous" "olmo-easy" "olmo-main" "olmo-heldout" "olmo-safety" "olmo-longcontext" "olmo-complete" "eval-debug" "non-gated" "gated" "single")
 if [[ ! " ${VALID_MODES[*]} " =~ " ${EVAL_MODE} " ]]; then
     echo "Error: Invalid mode '$EVAL_MODE'"
     echo "Valid modes: ${VALID_MODES[*]}"
@@ -204,6 +208,10 @@ case "$EVAL_MODE" in
         export TASKS=./configs/apertus/tasks_non_gated.txt
         export TABLE_METRICS=./configs/olmo/eval_debug_main_table.txt
         ;;
+    "gated")
+        export TASKS=./configs/apertus/tasks_gated.txt
+        export TABLE_METRICS=./configs/apertus/eval_debug_main_table.txt
+        ;;
     "single")
         export TASKS="$SINGLE_TASK"
         export TABLE_METRICS="$SINGLE_TASK"
@@ -269,6 +277,7 @@ echo "  Splits: $NUM_SPLITS"
 
 # --- Harness limit override ---
 [[ -n "$HARNESS_LIMIT" ]] && export HARNESS_LIMIT="$HARNESS_LIMIT"
+[[ -n "$HARNESS_BRANCH" ]] && export LM_EVAL_HARNESS_BRANCH="$HARNESS_BRANCH"
 
 # --- Dispatch based on model selection mode ---
 
@@ -295,6 +304,7 @@ if [[ -n "$MODEL_PATH" ]]; then
     [[ -n "$CUSTOM_TOKENIZER" ]] && echo "  Tok:    $CUSTOM_TOKENIZER"
     [[ -n "$BOS_FLAG" ]] && echo "  BOS:    $BOS_FLAG"
     [[ -n "$FEWSHOT_FLAG" ]] && echo "  Fewshot: $FEWSHOT_FLAG"
+    [[ -n "$HARNESS_BRANCH" ]] && echo "  Harness branch: $HARNESS_BRANCH"
     echo "  W&B:    $WANDB_ENTITY/$WANDB_PROJECT"
     echo "======================================"
 
@@ -317,6 +327,7 @@ elif [[ -n "$SCRIPT_PATH" ]]; then
     [[ -n "$BACKEND_FLAG" ]] && export LM_EVAL_BACKEND="$BACKEND_FLAG"
 
     echo "  Script: $SCRIPT_PATH"
+    [[ -n "$HARNESS_BRANCH" ]] && echo "  Harness branch: $HARNESS_BRANCH"
     echo "  W&B:    $WANDB_ENTITY/$WANDB_PROJECT"
     echo "======================================"
 
@@ -341,6 +352,7 @@ else
     for script in "${EVALUATION_SCRIPTS[@]}"; do
         echo "    - $script"
     done
+    [[ -n "$HARNESS_BRANCH" ]] && echo "  Harness branch: $HARNESS_BRANCH"
     echo "  W&B:    $WANDB_ENTITY/$WANDB_PROJECT"
     echo "======================================"
 
