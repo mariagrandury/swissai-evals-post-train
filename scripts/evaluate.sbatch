@@ -78,7 +78,25 @@ LM_EVAL_HARNESS_BRANCH=${LM_EVAL_HARNESS_BRANCH:-""}
 
 export HF_TOKEN="${HF_TOKEN:-$(tr -d '\r\n' < ./scripts/hf_token.txt)}"
 export WANDB_API_KEY="${WANDB_API_KEY:-$(tr -d '\r\n' < ./scripts/wandb_api_key.txt)}"
+export CSCS_SERVING_API="${CSCS_SERVING_API:-$(tr -d '\r\n' < ./scripts/cscs_serving_api_key.txt)}"
 
+warn_if_empty() {
+  local var="$1"
+  local msg="$2"
+
+  if [[ -z "${!var:-}" ]]; then
+    echo "WARNING: $var is not set. $msg" >&2
+  fi
+}
+
+warn_if_empty HF_TOKEN \
+  "This may cause Hugging Face rate-limit issues or prevent access to gated models/datasets."
+
+warn_if_empty WANDB_API_KEY \
+  "Weights & Biases logging is disabled. Results will NOT be uploaded."
+
+warn_if_empty CSCS_SERVING_API \
+  "Optional key missing. LLM-as-a-judge benchmarks via CSCS serving API will fail."
 
 # optional eval arguments
 MAX_LENGTH=${MAX_LENGTH:-4096}
@@ -271,7 +289,7 @@ pip install --no-cache-dir --upgrade \
     \"antlr4-python3-runtime==4.11\" \
     datasketch \
     segtok \
-    tokenizers \
+    \"tokenizers==0.22.2\" \
     mistral-common \
     sympy \
     spacy \
@@ -282,7 +300,10 @@ pip install --no-cache-dir --upgrade \
     immutabledict \
     langdetect \
     hf-transfer \
-    \"peft>=0.2.0\" "
+    subset2evaluate \
+    \"git+https://github.com/kylehowells/COMET.git@fix/transformers-5-compatibility\" \
+    \"alpaca-eval>=0.6.2\" \
+    \"peft>=0.18.0\"  "
 
 if [[ $LM_EVAL_BACKEND == "megatron_lm" ]]; then
   INSTALL_CMD="$INSTALL_CMD && pip install megatron-core --no-deps && export MEGATRON_PATH=$(pwd)/Megatron-LM"

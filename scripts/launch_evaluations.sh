@@ -111,7 +111,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- Validate mode ---
-VALID_MODES=("default" "multi-lingual" "apertus-previous" "olmo-easy" "olmo-main" "olmo-heldout" "olmo-safety" "olmo-longcontext" "olmo-complete" "eval-debug" "non-gated" "single")
+VALID_MODES=("default" "multi-lingual" "apertus-previous" "pretrain" "olmo-easy" "olmo-main" "olmo-heldout" "olmo-safety" "olmo-longcontext" "olmo-complete" "eval-debug" "non-gated" "single")
 if [[ ! " ${VALID_MODES[*]} " =~ " ${EVAL_MODE} " ]]; then
     echo "Error: Invalid mode '$EVAL_MODE'"
     echo "Valid modes: ${VALID_MODES[*]}"
@@ -168,6 +168,11 @@ case "$EVAL_MODE" in
     "apertus-previous")
         export TASKS=./configs/apertus/tasks_english.txt
         export TABLE_METRICS=./configs/apertus/tasks_english_main_table.txt
+        ;;
+    "pretrain")
+        export TASKS=./configs/apertus/tasks_pretrain.txt
+        export TABLE_METRICS=./configs/apertus/tasks_pretrain_main_table.txt
+        export WANDB_PROJECT="apertus-1.5-pre-training-v0.0"
         ;;
     "olmo-easy")
         export TASKS=./configs/olmo/olmo3_easy.txt

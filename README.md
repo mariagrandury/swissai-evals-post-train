@@ -34,6 +34,7 @@ bash scripts/launch_evaluations.sh single --task multijail --model meta-llama/Ll
 |------|-------|-------------|
 | `default` | 40 tasks | Full Apertus benchmark suite with basic evaluation |
 | `multi-lingual` | 10 tasks | Apertus benchmark suite with multi-lingual evaluation |
+| `pretrain` | 35 tasks | Apertus pretraining benchmark suite |
 | `apertus-previous` | 14 tasks | Apertus benchmark suite with multi-lingual evaluation |
 | `olmo-easy` | 21 tasks | Base Easy Suite: perplexity/BPB-style evaluation (mmlu, hellaswag, arc, etc.) |
 | `olmo-main` | 23 tasks | Base Main Suite: generation + MC (gsm8k_cot, humaneval, drop, etc.) |
@@ -43,7 +44,7 @@ bash scripts/launch_evaluations.sh single --task multijail --model meta-llama/Ll
 | `olmo-complete` | 30 tasks | Union of all above (excludes long-context), deduplicated |
 | `single` | 1 task | One task, user-specified through `--task` |
 
-Each mode has a corresponding task list (`configs/olmo3_<mode>.txt`) and metric config (`configs/olmo3_<mode>_main_table.txt`). Results are logged to separate W&B projects per mode (e.g., `swissai-evals-olmo3-easy`), except `complete` which uses the base project name.
+Each mode has a corresponding task list (`configs/olmo3_<mode>.txt`) and metric config (`configs/olmo3_<mode>_main_table.txt`). Results are logged to separate W&B projects per mode (e.g., `swissai-evals-olmo3-easy`).
 
 ### Model Selection Modes
 
@@ -72,7 +73,6 @@ bash scripts/launch_evaluations.sh <mode>
 | `--chat-template` | Force enable chat template |
 | `--no-chat-template` | Force disable chat template |
 | `--tokenizer <path>` | Custom tokenizer (default: same as model) |
-| `--bos` | Prepend BOS token (required for Apertus models) |
 | `--num-fewshot N` | Override num_fewshot globally. Tasks with explicit `num_fewshot: 0` in their YAML are never overridden. OLMo3 paper uses 5-shot for most MC tasks. |
 | `--backend <hf\|vllm>` | Inference backend (default: from sbatch script) |
 | `--splits K` | Split task list across K parallel SLURM nodes per model |
@@ -82,21 +82,31 @@ bash scripts/launch_evaluations.sh <mode>
 
 ```bash
 # OLMo3 paper-faithful 5-shot evaluation
-bash scripts/launch_evaluations.sh complete --model allenai/OLMo-2-1124-7B --num-fewshot 5
-
-# Apertus model (needs custom tokenizer + BOS)
-bash scripts/launch_evaluations.sh easy \
-  --model /capstor/.../Apertus8B-tokens15T-it2627139 \
-  --tokenizer alehc/swissai-tokenizer --bos
+bash scripts/launch_evaluations.sh olmo-complete --model allenai/OLMo-2-1124-7B --num-fewshot 5
 
 # Large model with vLLM and 8-way task splitting
-bash scripts/launch_evaluations.sh complete \
+bash scripts/launch_evaluations.sh default \
   --model Qwen/Qwen2.5-72B-Instruct --backend vllm --splits 8
 
 # Run all models from a batch script on the safety suite
-bash scripts/launch_evaluations.sh safety \
+bash scripts/launch_evaluations.sh olmo-safety \
   --script runners/hf_eval_multiple_other_models.sh --splits 4
 ```
+
+#### Deprecated option:
+
+| `--bos` | Prepend BOS token (deprecated: previously for Apertus models, now automatically infered from chat temlate) |
+
+---
+
+## Notes
+
+> [!NOTE]
+> **vLLM vs HF inference**: Generation task results (gsm8k, squadv2) may differ slightly between backends (for instruction-tuned models).. Only compare results across models using the same backend. We recommend to perform all evaluations with the `vllm` backend (default) to ensure reproducability. 
+- **Time limits**: The default 12h SLURM limit works for most evaluations. For large suites on large models, use `--splits` to parallelize.
+- **WANDB_API_KEY**: Must be available either as an environment variable or in `scripts/wandb_api_key.txt`.
+- **HF_TOKEN**: Must be available either as an environment variable or in  `scripts/hf_token.txt`.
+- **CSCS_SERVING_API**: Must be available either as an environment variable or in `scripts/cscs_serving_api_key.txt` to run LLM-as-a-judge evals (e.g. AlpacaEval). Key can be optained [here](https://serving.swissai.cscs.ch).
 
 ---
 
@@ -108,16 +118,12 @@ evals/
 │   ├── _*.txt                       # actual task lists
 │   ├── _*_main_table.txt            # Corresponding metric specs for W&B summary tables
 │   ├── models.md                    # Model registry with paths and special flags
-│   ├── olmo/                        # OLMo3 benchmark suites (easy, main, heldout, safety, longcontext, complete)
 │   ├── apertus/                     # Apertus task lists (english, multilingual, etc.)
-│   ├── tasks.json                   # Legacy task grouping config (swissai_eval hierarchy)
-│   └── automation.json              # Automated evaluation scheduling config
+│   ├── olmo/                        # OLMo3 benchmark suites (easy, main, heldout, safety, longcontext, complete)
 ├── scripts/
 │   ├── launch_evaluations.sh  # Main launcher (recommended entry point)
 │   ├── evaluate.sbatch        # SLURM job script for HF/vLLM model evaluation
 │   ├── aggregate_splits.sbatch   # Aggregation job for split evaluations
-│   ├── update_wandb.py              # Legacy W&B uploader (iteration-based)
-│   ├── automate.py                  # Continuous automation daemon
 │   └── alignment/                   # Python package for W&B upload and data handling
 │       ├── wandb_alignment_utils.py # Core upload logic with stratified sample selection
 │       ├── update_wandb_alignment.py       # Per-model W&B upload script
@@ -133,9 +139,7 @@ evals/
 ├── containers/                      # Container specs (Docker, env.toml for enroot/pyxis)
 │   ├── Dockerfile                   # CUDA 9.0+PTX, vLLM, FlashAttention-3
 │   ├── env.toml                     # Standard container config
-│   ├── env_nemo.toml                # NeMo-based container config
-│   └── ngc-25.12.toml               # NGC PyTorch with advanced NCCL config
-└── lm_eval_reference/               # Bundled lm-evaluation-harness reference (224 tasks)
+└── └── env_vllm.toml                # VLLM-based container config
 ```
 
 ---
@@ -170,7 +174,7 @@ No manual dependency management is needed -- the launcher handles everything via
 
 ## Task Configuration
 
-Task lists are plain text files in `configs/` with one task name per line. Comments (`#`) and blank lines are supported:
+Task lists are plain text files in `configs/apertus/...` with one task name per line. Comments (`#`) and blank lines are supported:
 
 ```
 # Math
@@ -209,7 +213,7 @@ Use `--num-fewshot 5` to match the OLMo3 paper settings. Tasks with hardcoded ex
 ```bash
 export TASKS=./configs/my_suite.txt
 export TABLE_METRICS=./configs/my_suite_main_table.txt
-bash scripts/launch_evaluations.sh complete --model my-model
+bash scripts/launch_evaluations.sh olmo-complete --model my-model
 ```
 
 Available task names can be found in `lm_eval_reference/tasks/` or by running `lm_eval --tasks list`.
@@ -316,10 +320,6 @@ Primary SLURM job script for HuggingFace-compatible model evaluation.
 
 The script auto-detects RULER long-context tasks and adjusts `MAX_LENGTH` and `max_model_len` accordingly.
 
-### `scripts/evaluate.sbatch`
-
-Alternative SLURM job script with the same interface. Uses `containers/env.toml` instead of `env_nemo.toml`. Use this for stable HF evals if the NeMo container has issues.
-
 ---
 
 ## Multi-Model Scripts
@@ -343,7 +343,7 @@ source runners/hf_base_runner.sh "SFT models"
 
 See `configs/models.md` for the full list of available models with their HF paths, local checkpoint paths, and required special flags. Key model families:
 
-- **Apertus** -- requires `--tokenizer alehc/swissai-tokenizer --bos`
+- **Apertus** (1.0)
 - **Meta Llama** (3.1, 3.3)
 - **OLMo** (2-1124, 2-0325, 3)
 - **Qwen** (2.5, 3)
@@ -357,7 +357,8 @@ The pipeline runs inside containers managed by enroot/pyxis on SLURM. Three cont
 
 | Config | Base Image | Use Case |
 |--------|-----------|----------|
-| `env.toml` | Pre-built `evals-vllm-cuda.sqsh` | Standard HF evals |
+| `env.toml` | Based on CSCS container image | Standard HF evals |
+| `env_vllm.toml` | Based on custom VLLM 0.16 image, build from source on top of CSCS container image | Standard HF evals |
 
 Dependencies (lm-eval-harness, vLLM, etc.) are installed at runtime inside the container via `pip install`. This ensures the latest versions but adds ~2-3 minutes of startup overhead per job.
 
@@ -401,39 +402,6 @@ The binary metrics used for correctness classification are defined in `BINARY_ME
 
 ---
 
-## Legacy: Iteration-Based Pipeline
-
-The original pipeline (`scripts/evaluate.sbatch` + `scripts/update_wandb.py`) is designed for tracking model training progress across checkpoints:
-
-```bash
-# Evaluate a specific iteration
-sbatch scripts/evaluate.sbatch allenai/OLMo-2-1124-7B 50000 4194304 OLMo2-7B
-
-# Upload all iterations to W&B (with ConsumedTokens x-axis)
-WANDB_PROJECT=my-project python3 scripts/update_wandb.py /path/to/eval-logs --name OLMo2-7B
-```
-
-This supports Megatron checkpoints (with automatic conversion), consumed-token tracking, and stage-aware token counting (e.g., `256:1000,512:3000,1024:` for multi-stage training).
-
-### Positional Arguments
-
-1. `<model>`: HuggingFace model name/path or Megatron checkpoint path
-2. `<iteration>`: Integer checkpoint iteration
-3. `<tokens-per-iter>`: Integer or multi-stage spec like `256:1000,512:3000,1024:`
-4. `<name>`: Unique identifier for the model (groups iterations together)
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `LOGS_ROOT` | Log directory (default: `$SCRATCH/eval-logs`). Structured as `LOGS_ROOT/<name>/iter_<iteration>` |
-| `TOKENIZER` | Custom tokenizer (required for Megatron checkpoints) |
-| `HF_TEMP_DIR` | Save converted Megatron checkpoints here |
-| `MEGATRON_BRANCH` | Branch for megatron-to-HF conversion scripts |
-| `HARNESS_BRANCH` | lm-evaluation-harness branch to install |
-| `REVISION` | HuggingFace model revision |
-| `SIZE` | Model size in billions (for model parallelism) |
-
 ### Task Separation (Legacy)
 
 The `swissai_eval` hierarchy and approximate time distribution:
@@ -450,13 +418,3 @@ swissai_eval (100%)
 
 Rule of thumb for fitting within the 12h limit: ensure `2.5 * percentage * model_size_B < 100`.
 
----
-
-## Notes
-
-> [!NOTE]
-> **vLLM vs HF inference**: Generation task results (gsm8k, squadv2) differ between backends. Only compare results across models using the same backend. Likelihood tasks (hellaswag) may also differ slightly.
-
-- **Time limits**: The default 12h SLURM limit works for most evaluations. For large suites on large models, use `--splits` to parallelize.
-- **WANDB_API_KEY**: Must be available either as an environment variable or in `scripts/wandb_api_key.txt`.
-- **HF_TOKEN**: Must be available either as an environment variable or in  `scripts/hf_token.txt`.
