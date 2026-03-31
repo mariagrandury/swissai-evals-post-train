@@ -221,6 +221,8 @@ fi
 #,tokenizer_mode=slow"
 
 HARNESS_EVAL_DIR=$HARNESS_DIR/eval_$(date +%Y%m%d_%H%M%S)_$SLURM_JOBID
+export FACTHALU_CACHE_DIR="/tmp/facthalu_cache_${NAME}_${SLURM_JOBID}"
+trap 'echo "Cleaning up FACTHALU cache: $FACTHALU_CACHE_DIR"; rm -rf "$FACTHALU_CACHE_DIR"' EXIT
 
 COMMON_EVAL_ARGS=(
 	--trust_remote_code
