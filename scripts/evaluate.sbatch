@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --account=a-infra01-1
+#SBATCH --account=infra01
 #SBATCH --cpus-per-task=200
 #SBATCH --gres=gpu:4
 #SBATCH --job-name=evaluation
@@ -303,7 +303,6 @@ pip install --no-cache-dir --upgrade \
     langdetect \
     hf-transfer \
     subset2evaluate \
-    \"git+https://github.com/kylehowells/COMET.git@fix/transformers-5-compatibility\" \
     \"alpaca-eval>=0.6.2\" \
     \"peft>=0.18.0\"  "
 
