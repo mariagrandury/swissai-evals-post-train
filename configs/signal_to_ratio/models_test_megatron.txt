@@ -1,0 +1,1 @@
+/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/Meg-Runs/data-mix-small/apertus-175M-fwEdu90-fw210-seed28/checkpoints/
