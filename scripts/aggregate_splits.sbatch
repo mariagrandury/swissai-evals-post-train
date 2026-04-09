@@ -33,7 +33,7 @@ TABLE_METRICS=${TABLE_METRICS:-""}
 NUM_SPLITS=${NUM_SPLITS:-1}
 
 export WANDB_API_KEY=${WANDB_API_KEY:-$(cat ./scripts/wandb_api_key.txt)}
-export HF_HOME=${HF_HOME:-/iopsstor/scratch/cscs/ymetz/huggingface}
+export HF_HOME=${HF_HOME:-/iopsstor/scratch/cscs/$USER/huggingface}
 
 if [ -f "$TABLE_METRICS" ]; then
     echo "Reading table metrics from file: $TABLE_METRICS"

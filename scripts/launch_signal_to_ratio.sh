@@ -143,8 +143,8 @@ echo "======================================"
 # --- Set up shared environment ---
 export TASKS="$TASKS_FILE"
 export NUM_SPLITS
-export WANDB_ENTITY=${WANDB_ENTITY:-apertus}
-export WANDB_PROJECT=${WANDB_PROJECT:-signal-to-ratio}
+export WANDB_ENTITY=${WANDB_ENTITY:-mariagrandury-epflnlp}
+export WANDB_PROJECT=${WANDB_PROJECT:-snr-experiments}
 export SBATCH_SCRIPT=${SBATCH_SCRIPT:-scripts/evaluate.sbatch}
 [[ -n "$HARNESS_LIMIT" ]] && export HARNESS_LIMIT
 [[ -n "$SLURM_TIME" ]] && export SLURM_TIME
