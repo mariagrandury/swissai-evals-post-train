@@ -146,6 +146,7 @@ export NUM_SPLITS
 export WANDB_ENTITY=${WANDB_ENTITY:-mariagrandury-epflnlp}
 export WANDB_PROJECT=${WANDB_PROJECT:-snr-experiments}
 export SBATCH_SCRIPT=${SBATCH_SCRIPT:-scripts/evaluate.sbatch}
+export LOGS_ROOT=${LOGS_ROOT:-/iopsstor/scratch/cscs/mariagrandury/eval-logs}
 [[ -n "$HARNESS_LIMIT" ]] && export HARNESS_LIMIT
 [[ -n "$SLURM_TIME" ]] && export SLURM_TIME
 
@@ -187,8 +188,11 @@ while IFS= read -r line || [[ -n "$line" ]]; do
         while IFS= read -r iter; do
             MODEL_NAME="${MODEL_BASE_NAME}-iter${iter}"
 
+            EVAL_LOGS_DIR="$LOGS_ROOT/$WANDB_ENTITY/$WANDB_PROJECT/$MODEL_NAME"
+
             if [[ "$DRY_RUN" == true ]]; then
                 echo "  [DRY RUN] Would launch: $MODEL_NAME (model=$CKPT_DIR, iter=$iter)"
+                echo "  [DRY RUN] Eval logs would be saved to: $EVAL_LOGS_DIR"
                 continue
             fi
 
@@ -198,6 +202,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
                 ["$MODEL_NAME"]="$CKPT_DIR"
             )
             source runners/hf_base_runner.sh "Megatron checkpoint"
+            echo "  Eval logs: $EVAL_LOGS_DIR"
         done <<< "$ITERS"
 
     elif [[ "$line" == https://* ]]; then
@@ -226,8 +231,11 @@ while IFS= read -r line || [[ -n "$line" ]]; do
         while IFS= read -r branch; do
             MODEL_NAME="${MODEL_BASE_NAME}-${branch}"
 
+            EVAL_LOGS_DIR="$LOGS_ROOT/$WANDB_ENTITY/$WANDB_PROJECT/$MODEL_NAME"
+
             if [[ "$DRY_RUN" == true ]]; then
                 echo "  [DRY RUN] Would launch: $MODEL_NAME (model=$REPO_ID, revision=$branch)"
+                echo "  [DRY RUN] Eval logs would be saved to: $EVAL_LOGS_DIR"
                 continue
             fi
 
@@ -237,6 +245,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
                 ["$MODEL_NAME"]="$REPO_ID"
             )
             source runners/hf_base_runner.sh "HuggingFace checkpoint"
+            echo "  Eval logs: $EVAL_LOGS_DIR"
         done <<< "$BRANCHES"
 
     else
