@@ -21,6 +21,12 @@ NUM_SPLITS=${NUM_SPLITS:-1}
 # Allow overriding the sbatch script (e.g. evaluate.sbatch)
 SBATCH_SCRIPT=${SBATCH_SCRIPT:-scripts/evaluate.sbatch}
 
+# Build optional sbatch args (e.g. --time override)
+SBATCH_EXTRA_ARGS=()
+if [[ -n "${SLURM_TIME:-}" ]]; then
+    SBATCH_EXTRA_ARGS+=(--time "$SLURM_TIME")
+fi
+
 # Launch evaluation jobs for each model
 echo "Launching evaluation jobs for ${#MODEL_CHECKPOINTS[@]} ${MODEL_TYPE_DESC}..."
 echo "WANDB Project: ${WANDB_PROJECT}"
@@ -54,6 +60,7 @@ for MODEL in "${!MODEL_CHECKPOINTS[@]}"; do
         # Single-node execution (original behavior)
         sbatch --job-name eval-$MODEL \
             --export=ALL,CKPT_ITER=$CKPT_ITER \
+            "${SBATCH_EXTRA_ARGS[@]}" \
             "$SBATCH_SCRIPT" "$CKPT_PATH" "$MODEL"
     else
         # Submit K split jobs, then one aggregation job with dependency
@@ -62,6 +69,7 @@ for MODEL in "${!MODEL_CHECKPOINTS[@]}"; do
             JOB_ID=$(sbatch --parsable \
                 --job-name "eval-${MODEL}-split${i}" \
                 --export=ALL,NUM_SPLITS=$NUM_SPLITS,SPLIT_INDEX=$i,CKPT_ITER=$CKPT_ITER \
+                "${SBATCH_EXTRA_ARGS[@]}" \
                 "$SBATCH_SCRIPT" "$CKPT_PATH" "$MODEL")
             SPLIT_JOB_IDS+=("$JOB_ID")
             echo "  Split $((i+1))/$NUM_SPLITS submitted: job $JOB_ID"
@@ -76,6 +84,7 @@ for MODEL in "${!MODEL_CHECKPOINTS[@]}"; do
             --job-name "eval-${MODEL}-aggregate" \
             --dependency="afterok:${DEP_STRING}" \
             --export=ALL,NUM_SPLITS=$NUM_SPLITS \
+            "${SBATCH_EXTRA_ARGS[@]}" \
             scripts/aggregate_splits.sbatch "$CKPT_PATH" "$MODEL")
         echo "  Aggregation job submitted: job $AGG_JOB_ID (depends on splits)"
     fi
