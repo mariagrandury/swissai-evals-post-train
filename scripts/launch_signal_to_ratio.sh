@@ -74,13 +74,14 @@ if ! [[ "$NUM_SPLITS" =~ ^[0-9]+$ ]] || (( NUM_SPLITS < 1 )); then
     exit 1
 fi
 
-# --- Helper: get last N Megatron checkpoint iterations ---
+# --- Helper: get last N Megatron checkpoint iterations (multiples of 2000 only) ---
 get_megatron_checkpoints() {
     local ckpt_dir="$1"
     local n="$2"
     ls -d "${ckpt_dir}"/iter_* 2>/dev/null \
         | sed 's/.*iter_//' | sed 's/^0*//' \
         | sort -n \
+        | awk '$1 % 2000 == 0' \
         | tail -n "$n"
 }
 
