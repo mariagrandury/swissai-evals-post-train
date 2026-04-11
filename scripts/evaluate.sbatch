@@ -302,7 +302,8 @@ pip install --no-cache-dir --upgrade \
     hf-transfer \
     subset2evaluate \
     \"alpaca-eval>=0.6.2\" \
-    \"peft>=0.18.0\"  "
+    \"peft>=0.18.0\" \
+    sentencepiece  "
 
 if [[ $LM_EVAL_BACKEND == "megatron_lm" ]]; then
   INSTALL_CMD="$INSTALL_CMD && pip install megatron-core --no-deps && export MEGATRON_PATH=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM"
