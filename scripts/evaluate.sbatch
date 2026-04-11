@@ -305,7 +305,7 @@ pip install --no-cache-dir --upgrade \
     \"peft>=0.18.0\"  "
 
 if [[ $LM_EVAL_BACKEND == "megatron_lm" ]]; then
-  INSTALL_CMD="$INSTALL_CMD && pip install --no-cache-dir --no-deps transformer-engine==2.9.0 nvidia-modelopt==0.37.0 && export MEGATRON_PATH=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM"
+  INSTALL_CMD="$INSTALL_CMD && export MEGATRON_PATH=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM"
 fi
 
 if [[ $LM_EVAL_BACKEND == "vllm" ]]; then
@@ -324,7 +324,7 @@ echo "Starting timing for installation and evaluation..."
 START_TIME=$(date +%s)
 
 if [[ $LM_EVAL_BACKEND == "megatron_lm" ]]; then
-  srun -n 1 --mpi=pmix -ul --environment=./containers/env_vllm.toml bash -lc "
+  srun -n 1 --mpi=pmix -ul --environment=/capstor/store/cscs/swissai/a139/containers/ngc_25-11-nemo-alps3.toml bash -lc "
     set -euo pipefail
     unset SSL_CERT_FILE
 
