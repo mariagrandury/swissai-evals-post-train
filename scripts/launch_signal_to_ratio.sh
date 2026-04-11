@@ -2,7 +2,7 @@
 
 # launch_signal_to_ratio.sh - Launch evaluations for signal-to-ratio analysis
 #
-# Evaluates the last N checkpoints of each model on specified tasks.
+# Evaluates selected checkpoints of each model on specified tasks.
 # Models can be Megatron (local paths starting with /iopsstor or /capstor)
 # or HuggingFace (URLs starting with https://huggingface.co/).
 #
@@ -13,17 +13,20 @@
 #   bash scripts/launch_signal_to_ratio.sh \
 #     --models configs/signal_to_ratio/models_pretraining_custom.txt \
 #     --tasks configs/signal_to_ratio/tasks_pretraining.txt \
-#     --last-n-checkpoints 5 \
+#     --last 5 \
 #     [--limit 10] [--splits 2]
 #
 # Options:
 #   --models <file>            - Text file with one model per line
 #   --tasks <file>             - Text file with one lm-harness task per line
-#   --last-n-checkpoints <N>   - Number of most recent checkpoints to evaluate
+#   --last <N>                 - Evaluate the last N checkpoints (sorted alphabetically)
+#   --total <T>                - Evaluate T checkpoints evenly spaced across all available
 #   --limit <N>                - Limit samples per task (for testing)
 #   --splits <K>               - Split tasks across K parallel nodes per model
 #   --time <HH:MM:SS>          - SLURM time limit per job (default: from sbatch script)
 #   --dry-run                  - Print what would be launched without submitting jobs
+#
+# Note: --last and --total are mutually exclusive; exactly one must be specified.
 
 set -euo pipefail
 
@@ -31,6 +34,7 @@ set -euo pipefail
 MODELS_FILE=""
 TASKS_FILE=""
 LAST_N=0
+TOTAL_T=0
 HARNESS_LIMIT=""
 NUM_SPLITS=1
 SLURM_TIME=""
@@ -38,13 +42,14 @@ DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --models)              MODELS_FILE="$2";    shift 2 ;;
-        --tasks)               TASKS_FILE="$2";     shift 2 ;;
-        --last-n-checkpoints)  LAST_N="$2";         shift 2 ;;
-        --limit)               HARNESS_LIMIT="$2";  shift 2 ;;
-        --splits)              NUM_SPLITS="$2";     shift 2 ;;
-        --time)                SLURM_TIME="$2";     shift 2 ;;
-        --dry-run)             DRY_RUN=true;        shift ;;
+        --models)   MODELS_FILE="$2";    shift 2 ;;
+        --tasks)    TASKS_FILE="$2";     shift 2 ;;
+        --last)     LAST_N="$2";         shift 2 ;;
+        --total)    TOTAL_T="$2";        shift 2 ;;
+        --limit)    HARNESS_LIMIT="$2";  shift 2 ;;
+        --splits)   NUM_SPLITS="$2";     shift 2 ;;
+        --time)     SLURM_TIME="$2";     shift 2 ;;
+        --dry-run)  DRY_RUN=true;        shift ;;
         *)
             echo "Error: Unknown option '$1'"
             exit 1
@@ -65,8 +70,20 @@ if [[ ! -f "$TASKS_FILE" ]]; then
     echo "Error: Tasks file not found: $TASKS_FILE"
     exit 1
 fi
-if ! [[ "$LAST_N" =~ ^[0-9]+$ ]] || (( LAST_N < 1 )); then
-    echo "Error: --last-n-checkpoints must be an integer >= 1"
+if (( LAST_N > 0 && TOTAL_T > 0 )); then
+    echo "Error: --last and --total are mutually exclusive"
+    exit 1
+fi
+if (( LAST_N == 0 && TOTAL_T == 0 )); then
+    echo "Error: exactly one of --last or --total must be specified"
+    exit 1
+fi
+if (( LAST_N > 0 )) && { ! [[ "$LAST_N" =~ ^[0-9]+$ ]] || (( LAST_N < 1 )); }; then
+    echo "Error: --last must be an integer >= 1"
+    exit 1
+fi
+if (( TOTAL_T > 0 )) && { ! [[ "$TOTAL_T" =~ ^[0-9]+$ ]] || (( TOTAL_T < 1 )); }; then
+    echo "Error: --total must be an integer >= 1"
     exit 1
 fi
 if ! [[ "$NUM_SPLITS" =~ ^[0-9]+$ ]] || (( NUM_SPLITS < 1 )); then
@@ -74,26 +91,61 @@ if ! [[ "$NUM_SPLITS" =~ ^[0-9]+$ ]] || (( NUM_SPLITS < 1 )); then
     exit 1
 fi
 
-# --- Helper: get last N Megatron checkpoint iterations (multiples of 2000 only) ---
+# --- Checkpoint selection mode ---
+CKPT_MODE="last"
+CKPT_COUNT="$LAST_N"
+if (( TOTAL_T > 0 )); then
+    CKPT_MODE="total"
+    CKPT_COUNT="$TOTAL_T"
+fi
+
+# --- Helper: get Megatron checkpoint iterations (multiples of 2000 only) ---
+# Usage: get_megatron_checkpoints <dir> <mode> <count>
+#   mode=last:  return the last <count> checkpoints
+#   mode=total: return <count> evenly spaced checkpoints across all available
 get_megatron_checkpoints() {
     local ckpt_dir="$1"
-    local n="$2"
-    ls -d "${ckpt_dir}"/iter_* 2>/dev/null \
+    local mode="$2"
+    local count="$3"
+
+    local all_iters
+    all_iters=$(ls -d "${ckpt_dir}"/iter_* 2>/dev/null \
         | sed 's/.*iter_//' | sed 's/^0*//' \
         | sort -n \
-        | awk '$1 % 2000 == 0' \
-        | tail -n "$n"
+        | awk '$1 % 2000 == 0')
+
+    [[ -z "$all_iters" ]] && return
+
+    if [[ "$mode" == "last" ]]; then
+        echo "$all_iters" | tail -n "$count"
+    else
+        echo "$all_iters" | awk -v t="$count" '
+            { lines[NR] = $0 }
+            END {
+                n = NR
+                if (t >= n) { for (i = 1; i <= n; i++) print lines[i]; exit }
+                for (i = 0; i < t; i++) {
+                    idx = int(i * (n - 1) / (t - 1)) + 1
+                    print lines[idx]
+                }
+            }'
+    fi
 }
 
-# --- Helper: get last N HuggingFace checkpoint branches ---
+# --- Helper: get HuggingFace checkpoint branches ---
+# Usage: get_hf_checkpoints <repo_id> <mode> <count>
+#   mode=last:  return the last <count> checkpoints (sorted alphabetically)
+#   mode=total: return <count> evenly spaced checkpoints across all available
 get_hf_checkpoints() {
     local repo_id="$1"
-    local n="$2"
+    local mode="$2"
+    local count="$3"
     python3 -c "
-import json, re, sys, urllib.request
+import json, sys, urllib.request
 
 repo_id = sys.argv[1]
-n = int(sys.argv[2])
+mode = sys.argv[2]
+count = int(sys.argv[3])
 
 url = f'https://huggingface.co/api/models/{repo_id}/refs'
 try:
@@ -102,16 +154,23 @@ except Exception as e:
     print(f'Error fetching branches: {e}', file=sys.stderr)
     sys.exit(1)
 
-branches = [b['name'] for b in data.get('branches', []) if b['name'] != 'main']
+branches = sorted(b['name'] for b in data.get('branches', []) if b['name'] != 'main')
 
-def extract_number(name):
-    nums = re.findall(r'\d+', name)
-    return int(nums[-1]) if nums else 0
+if not branches:
+    sys.exit(0)
 
-branches.sort(key=extract_number)
-for b in branches[-n:]:
+if mode == 'last':
+    selected = branches[-count:]
+else:
+    n = len(branches)
+    if count >= n:
+        selected = branches
+    else:
+        selected = [branches[round(i * (n - 1) / (count - 1))] for i in range(count)]
+
+for b in selected:
     print(b)
-" "$repo_id" "$n"
+" "$repo_id" "$mode" "$count"
 }
 
 # --- Helper: derive model name from path/URL ---
@@ -134,7 +193,11 @@ echo "======================================"
 echo "Signal-to-Ratio Evaluation Launcher"
 echo "  Models file:    $MODELS_FILE"
 echo "  Tasks file:     $TASKS_FILE"
-echo "  Last N ckpts:   $LAST_N"
+if [[ "$CKPT_MODE" == "last" ]]; then
+    echo "  Mode:           last $CKPT_COUNT checkpoints"
+else
+    echo "  Mode:           $CKPT_COUNT evenly spaced checkpoints"
+fi
 [[ -n "$HARNESS_LIMIT" ]] && echo "  Limit:          $HARNESS_LIMIT"
 [[ -n "$SLURM_TIME" ]] && echo "  Time limit:     $SLURM_TIME"
 echo "  Splits:         $NUM_SPLITS"
@@ -168,7 +231,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
         echo "Processing Megatron model: $MODEL_BASE_NAME"
         echo "  Checkpoint dir: $CKPT_DIR"
 
-        ITERS=$(get_megatron_checkpoints "$CKPT_DIR" "$LAST_N")
+        ITERS=$(get_megatron_checkpoints "$CKPT_DIR" "$CKPT_MODE" "$CKPT_COUNT")
         if [[ -z "$ITERS" ]]; then
             echo "  WARNING: No checkpoints found in $CKPT_DIR, skipping."
             continue
@@ -213,7 +276,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
         echo ""
         echo "Processing HuggingFace model: $MODEL_BASE_NAME ($REPO_ID)"
 
-        BRANCHES=$(get_hf_checkpoints "$REPO_ID" "$LAST_N")
+        BRANCHES=$(get_hf_checkpoints "$REPO_ID" "$CKPT_MODE" "$CKPT_COUNT")
         if [[ -z "$BRANCHES" ]]; then
             echo "  WARNING: No checkpoint branches found for $REPO_ID, skipping."
             continue

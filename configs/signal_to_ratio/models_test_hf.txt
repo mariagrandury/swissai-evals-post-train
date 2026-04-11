@@ -1,1 +1,1 @@
-https://huggingface.co/daslab-testing/Apertus-1.7B-it800000-SFT
+https://huggingface.co/HuggingFaceTB/SmolLM3-3B-checkpoints
