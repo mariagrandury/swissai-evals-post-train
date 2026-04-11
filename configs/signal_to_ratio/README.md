@@ -3,7 +3,7 @@
 ## Launch jobs
 
 ```bash
-cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/ &&
+cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/ && git pull &&
 bash scripts/launch_signal_to_ratio.sh \
   --models configs/signal_to_ratio/models_test_megatron.txt \
   --tasks configs/signal_to_ratio/tasks_test.txt \
@@ -14,7 +14,7 @@ bash scripts/launch_signal_to_ratio.sh \
 ```
 
 ```bash
-cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/ &&
+cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/ && git pull &&
 bash scripts/launch_signal_to_ratio.sh \
   --models configs/signal_to_ratio/models_pretraining_custom.txt \
   --tasks configs/signal_to_ratio/tasks_pretraining.txt \
@@ -25,7 +25,7 @@ bash scripts/launch_signal_to_ratio.sh \
 ```
 
 ```bash
-cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/ &&
+cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/ && git pull &&
 bash scripts/launch_signal_to_ratio.sh \
   --models configs/signal_to_ratio/models_pretraining_custom.txt \
   --tasks configs/signal_to_ratio/tasks_pretraining.txt \
@@ -49,8 +49,14 @@ Cancel:
 squeue --me --noheader -o "%i %j" | grep eval | awk '{print $1}' | xargs scancel
 ```
 
-## Check eval log
+## Check eval out & err files
 
 ```bash
-cd /iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/eval_logs/
+cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/logs/
+```
+
+## Check eval results
+
+```bash
+cd /iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/eval_logs/mariagrandury-epflnlp/snr-experiments/
 ```

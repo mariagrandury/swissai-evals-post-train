@@ -305,7 +305,7 @@ pip install --no-cache-dir --upgrade \
     \"peft>=0.18.0\"  "
 
 if [[ $LM_EVAL_BACKEND == "megatron_lm" ]]; then
-  INSTALL_CMD="$INSTALL_CMD && pip install megatron-core --no-deps && export MEGATRON_PATH=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM"
+  INSTALL_CMD="$INSTALL_CMD && export MEGATRON_PATH=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM"
 fi
 
 if [[ $LM_EVAL_BACKEND == "vllm" ]]; then
