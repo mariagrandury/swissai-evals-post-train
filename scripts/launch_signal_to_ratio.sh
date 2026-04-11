@@ -146,7 +146,7 @@ export NUM_SPLITS
 export WANDB_ENTITY=${WANDB_ENTITY:-mariagrandury-epflnlp}
 export WANDB_PROJECT=${WANDB_PROJECT:-snr-experiments}
 export SBATCH_SCRIPT=${SBATCH_SCRIPT:-scripts/evaluate.sbatch}
-export LOGS_ROOT=${LOGS_ROOT:-/iopsstor/scratch/cscs/mariagrandury/eval-logs}
+export LOGS_ROOT=${LOGS_ROOT:-/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/eval_logs}
 [[ -n "$HARNESS_LIMIT" ]] && export HARNESS_LIMIT
 [[ -n "$SLURM_TIME" ]] && export SLURM_TIME
 

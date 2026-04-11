@@ -66,7 +66,7 @@ CKPT_ITER=${CKPT_ITER:-"latest"}
 BS=${BS:-"auto:20"}
 SIZE=${SIZE:-1}
 BOS=${BOS:-false}
-LOGS_ROOT=${LOGS_ROOT:-/capstor/store/cscs/swissai/infra01/eval-logs}
+LOGS_ROOT=${LOGS_ROOT:-/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/eval_logs}
 TASKS=${TASKS:-./configs/apertus/tasks_default.txt}
 TABLE_METRICS=${TABLE_METRICS:-./configs/apertus/tasks_default_main_table.txt}
 WANDB_ENTITY=${WANDB_ENTITY:-apertus}
@@ -305,7 +305,7 @@ pip install --no-cache-dir --upgrade \
     \"peft>=0.18.0\"  "
 
 if [[ $LM_EVAL_BACKEND == "megatron_lm" ]]; then
-  INSTALL_CMD="$INSTALL_CMD && pip install megatron-core --no-deps && export MEGATRON_PATH=$(pwd)/Megatron-LM"
+  INSTALL_CMD="$INSTALL_CMD && pip install megatron-core --no-deps && export MEGATRON_PATH=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM"
 fi
 
 if [[ $LM_EVAL_BACKEND == "vllm" ]]; then
