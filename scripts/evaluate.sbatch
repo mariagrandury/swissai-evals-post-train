@@ -281,7 +281,8 @@ if [[ -n "$LM_EVAL_HARNESS_BRANCH" ]]; then
     LM_EVAL_HARNESS_PIP_SPEC="${LM_EVAL_HARNESS_PIP_SPEC}@${LM_EVAL_HARNESS_BRANCH}"
 fi
 
-INSTALL_CMD="pip install --no-cache-dir --upgrade \"$LM_EVAL_HARNESS_PIP_SPEC\" && \
+INSTALL_CMD="pip install --no-cache-dir sentencepiece protobuf && \
+pip install --no-cache-dir --upgrade \"$LM_EVAL_HARNESS_PIP_SPEC\" && \
 pip install --no-cache-dir --upgrade \
     \"huggingface-hub>=1.3.0,<2.0\" \
     \"transformers==5.1.0\" \
@@ -302,8 +303,8 @@ pip install --no-cache-dir --upgrade \
     hf-transfer \
     subset2evaluate \
     \"alpaca-eval>=0.6.2\" \
-    \"peft>=0.18.0\" \
-    sentencepiece  "
+    \"peft>=0.18.0\" && \
+python -c 'import sentencepiece; print(f\"sentencepiece {sentencepiece.__version__} OK\")'"
 
 if [[ $LM_EVAL_BACKEND == "megatron_lm" ]]; then
   INSTALL_CMD="$INSTALL_CMD && pip install megatron-core --no-deps && export MEGATRON_PATH=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM"
