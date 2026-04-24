@@ -56,7 +56,8 @@ echo "# Regenerate: bash scripts/generate_snr_runner.sh --models $MODELS_FILE $M
 if [[ -s "$MEG" ]]; then
     cat <<'EOF'
 
-# ===== Megatron checkpoints (one sbatch per iter via MODEL_ITERATIONS) =====
+# ===== Megatron checkpoints (one sbatch per iter; hf_base_runner parses the
+# iter from the "<base>-iter<N>" key) =====
 export TOKENIZER=${TOKENIZER:-alehc/swissai-tokenizer}
 export BOS=${BOS:-true}
 export APPLY_CHAT_TEMPLATE=${APPLY_CHAT_TEMPLATE:-false}
@@ -65,9 +66,6 @@ export LM_EVAL_BACKEND=${LM_EVAL_BACKEND:-megatron_lm}
 declare -A MODEL_CHECKPOINTS=(
 EOF
     cat "$MEG"
-    echo ')'; echo ''; echo 'declare -A MODEL_ITERATIONS=('
-    # MODEL_ITERATIONS key format: "<model>-iter"; value: iter number.
-    sed -E 's/^    \["([^"]+)-iter([0-9]+)"\].*/    ["\1-iter\2-iter"]="\2"/' "$MEG"
     echo ')'; echo ''
     echo 'source runners/hf_base_runner.sh "SNR Megatron checkpoints"'
 fi
@@ -76,7 +74,7 @@ if [[ -s "$HF" ]]; then
     cat <<'EOF'
 
 # ===== HuggingFace revisions (REVISION is singleton; loop per branch) =====
-unset MODEL_CHECKPOINTS MODEL_ITERATIONS
+unset MODEL_CHECKPOINTS
 export APPLY_CHAT_TEMPLATE=${APPLY_CHAT_TEMPLATE:-false}
 export LM_EVAL_BACKEND=${LM_EVAL_BACKEND:-vllm}
 

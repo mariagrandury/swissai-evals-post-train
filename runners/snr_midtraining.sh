@@ -3,7 +3,7 @@
 # Regenerate: bash scripts/generate_snr_runner.sh --models configs/signal_to_ratio/models_midtraining_hf.txt --last 3 > $0
 
 # ===== HuggingFace revisions (REVISION is singleton; loop per branch) =====
-unset MODEL_CHECKPOINTS MODEL_ITERATIONS
+unset MODEL_CHECKPOINTS
 export APPLY_CHAT_TEMPLATE=${APPLY_CHAT_TEMPLATE:-false}
 export LM_EVAL_BACKEND=${LM_EVAL_BACKEND:-vllm}
 

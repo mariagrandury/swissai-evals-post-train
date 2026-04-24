@@ -8,10 +8,11 @@ emerges across training.
 Two steps, cleanly separated:
 
 1. **Generate** a stage runner from a models file. A runner is a plain bash file in
-   `runners/` that declares `MODEL_CHECKPOINTS` (+ `MODEL_ITERATIONS` for Megatron)
-   and sources `runners/hf_base_runner.sh` — identical idiom to the existing
-   `runners/hf_eval_multiple_*.sh` files. Commit it so the evaluated-checkpoint
-   snapshot is version-controlled.
+   `runners/` that declares `MODEL_CHECKPOINTS` and sources
+   `runners/hf_base_runner.sh` — identical idiom to the existing
+   `runners/hf_eval_multiple_*.sh` files. Megatron keys embed the iter as
+   `<base>-iter<N>`; the shared runner parses it directly. Commit the runner so
+   the evaluated-checkpoint snapshot is version-controlled.
 2. **Launch** with the standard `launch_evaluations.sh --script …` entry point.
    The new `snr-pretraining` / `snr-midtraining` / `snr-posttraining` modes set
    `TASKS` to the right `tasks_*.txt` (pretraining and midtraining share
