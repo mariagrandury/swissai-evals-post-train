@@ -223,14 +223,18 @@ case "$EVAL_MODE" in
         export TABLE_METRICS="$SINGLE_TASK"
         export WANDB_PROJECT="${WANDB_PROJECT}-single"
         ;;
-    "snr-pretraining")
+    "snr-pretraining"|"snr-midtraining")
+        # Midtraining checkpoints are still base models; evaluate them with the
+        # same pretraining task set.
         export TASKS=./configs/signal_to_ratio/tasks_pretraining.txt
-        ;;
-    "snr-midtraining")
-        export TASKS=./configs/signal_to_ratio/tasks_midtraining.txt
         ;;
     "snr-posttraining")
         export TASKS=./configs/signal_to_ratio/tasks_posttraining.txt
+        # Posttraining checkpoints are Instruct/SFT/DPO models; tasks like
+        # ifeval, humaneval_instruct, mbpp_instruct, gsm8k_cot require a chat
+        # template to produce meaningful results. The --chat-template /
+        # --no-chat-template flags still override this.
+        export APPLY_CHAT_TEMPLATE=${APPLY_CHAT_TEMPLATE:-true}
         ;;
 esac
 

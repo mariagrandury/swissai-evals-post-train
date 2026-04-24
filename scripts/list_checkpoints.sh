@@ -16,6 +16,7 @@ select_lines() {
             if (n==0) { print "no candidates to select from" > "/dev/stderr"; exit 2 }
             if (m=="last") for (i=(n>c?n-c+1:1); i<=n; i++) print a[i]
             else if (c>=n) for (i=1; i<=n; i++) print a[i]
+            else if (c==1) print a[n]
             else for (i=0; i<c; i++) print a[int(i*(n-1)/(c-1))+1]
         }'
 }

@@ -13,9 +13,13 @@ Two steps, cleanly separated:
    `runners/hf_eval_multiple_*.sh` files. Commit it so the evaluated-checkpoint
    snapshot is version-controlled.
 2. **Launch** with the standard `launch_evaluations.sh --script …` entry point.
-   The new `snr-pretraining` / `snr-midtraining` / `snr-posttraining` modes just
-   set `TASKS` to the right `tasks_*.txt` and switch the W&B defaults to
-   `mariagrandury-epflnlp/snr-experiments`.
+   The new `snr-pretraining` / `snr-midtraining` / `snr-posttraining` modes set
+   `TASKS` to the right `tasks_*.txt` (pretraining and midtraining share
+   `tasks_pretraining.txt` — both are base-model evaluations) and switch the
+   W&B defaults to `mariagrandury-epflnlp/snr-experiments`. `snr-posttraining`
+   additionally defaults `APPLY_CHAT_TEMPLATE=true` because the task set
+   (ifeval, humaneval_instruct, …) requires a chat template on Instruct/SFT
+   models; pass `--no-chat-template` to override.
 
 Scripts:
 
