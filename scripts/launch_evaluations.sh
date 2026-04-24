@@ -111,7 +111,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- Validate mode ---
-VALID_MODES=("default" "multi-lingual" "apertus-previous" "pretrain" "olmo-easy" "olmo-main" "olmo-heldout" "olmo-safety" "olmo-longcontext" "olmo-complete" "eval-debug" "non-gated" "single")
+VALID_MODES=("default" "multi-lingual" "apertus-previous" "pretrain" "olmo-easy" "olmo-main" "olmo-heldout" "olmo-safety" "olmo-longcontext" "olmo-complete" "eval-debug" "non-gated" "single" "snr-pretraining" "snr-midtraining" "snr-posttraining")
 if [[ ! " ${VALID_MODES[*]} " =~ " ${EVAL_MODE} " ]]; then
     echo "Error: Invalid mode '$EVAL_MODE'"
     echo "Valid modes: ${VALID_MODES[*]}"
@@ -147,6 +147,12 @@ if [[ -n "$MODEL_PATH" && -n "$SCRIPT_PATH" ]]; then
 fi
 
 # --- Environment defaults ---
+# SNR modes have their own W&B entity/project defaults; seed them before the generic
+# fallbacks below so they only apply when the user hasn't exported overrides.
+if [[ "$EVAL_MODE" == snr-* ]]; then
+    : "${WANDB_ENTITY:=mariagrandury-epflnlp}"
+    : "${WANDB_PROJECT:=snr-experiments}"
+fi
 export WANDB_ENTITY=${WANDB_ENTITY:-apertus}
 export WANDB_PROJECT=${WANDB_PROJECT:-apertus-1.5-post-training-v0.0}
 export NUM_SPLITS
@@ -216,6 +222,15 @@ case "$EVAL_MODE" in
         export TASKS="$SINGLE_TASK"
         export TABLE_METRICS="$SINGLE_TASK"
         export WANDB_PROJECT="${WANDB_PROJECT}-single"
+        ;;
+    "snr-pretraining")
+        export TASKS=./configs/signal_to_ratio/tasks_pretraining.txt
+        ;;
+    "snr-midtraining")
+        export TASKS=./configs/signal_to_ratio/tasks_midtraining.txt
+        ;;
+    "snr-posttraining")
+        export TASKS=./configs/signal_to_ratio/tasks_posttraining.txt
         ;;
 esac
 
