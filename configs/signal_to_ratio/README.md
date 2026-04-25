@@ -106,17 +106,20 @@ bash scripts/launch_evaluations.sh snr-midtraining --script runners/snr_midtrain
 
 ### Smoke tests
 
-Tiny end-to-end runs that exercise both backends through the existing
-`single` mode. `--task` accepts one task name or a comma-separated list, and
-`--limit 4` caps samples per task. No SNR-specific flags needed.
+Tiny end-to-end runs through the existing `single` mode (one or
+comma-separated `--task` values, `--limit 4` to cap samples per task). The
+`WANDB_*` prefix routes results into the SNR W&B family (`single` mode
+appends `-single` to the project name, so they land in
+`snr-experiments-single` and stay separate from real sweep data).
 
-A pre-generated HF runner is committed at
-[runners/snr_test.sh](../../runners/snr_test.sh) (one SmolLM3-3B-checkpoints
-revision). For the multi-checkpoint and Megatron variants, generate a runner
-on the cluster first, then launch.
+`runners/snr_test.sh` (committed) covers the simplest HF case; for the
+others, generate a runner from `models_test_hf.txt` /
+`models_test_megatron.txt` first.
 
 ```bash
-# 1) 1 HF checkpoint, 1 task — uses the committed runner
+WANDB_ENTITY=mariagrandury-epflnlp WANDB_PROJECT=snr-experiments
+
+# 1) 1 HF checkpoint, 1 task — committed runner
 bash scripts/launch_evaluations.sh single \
     --script runners/snr_test.sh --task hellaswag --limit 4
 
@@ -142,14 +145,10 @@ bash scripts/launch_evaluations.sh single \
     --script runners/snr_test_meg_2.sh --task hellaswag,piqa --limit 4
 ```
 
-Notes:
-
-- `single --task` passes the value straight through to `lm_eval --tasks`,
-  so a comma-separated list works.
-- These runs go to the `single`-suffixed W&B project (e.g.
-  `apertus-1.5-post-training-v0.0-single`) rather than `snr-experiments`
-  because they're pipeline checks, not real SNR data points. Sanity-check a
-  generated runner once with `bash -n runners/snr_test_hf_2.sh`.
+`models_test_megatron.txt` already points at
+`/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/Meg-Runs/data-mix-small/apertus-350M-fwEdu60-fw240-seed1904/checkpoints/`,
+so cases 3 and 4 just work. Sanity-check a generated runner once with
+`bash -n runners/snr_test_meg_2.sh` before the first launch.
 
 ## Where outputs go
 

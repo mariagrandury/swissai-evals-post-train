@@ -223,10 +223,11 @@ case "$EVAL_MODE" in
         export TABLE_METRICS="$SINGLE_TASK"
         export WANDB_PROJECT="${WANDB_PROJECT}-single"
         ;;
-    "snr-pretraining"|"snr-midtraining")
-        # Midtraining checkpoints are still base models; evaluate them with the
-        # same pretraining task set.
+    "snr-pretraining")
         export TASKS=./configs/signal_to_ratio/tasks_pretraining.txt
+        ;;
+    "snr-midtraining")
+        export TASKS=./configs/signal_to_ratio/tasks_midtraining.txt
         ;;
     "snr-posttraining")
         export TASKS=./configs/signal_to_ratio/tasks_posttraining.txt
