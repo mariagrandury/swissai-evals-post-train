@@ -21,7 +21,8 @@ NUM_SPLITS=${NUM_SPLITS:-1}
 # Allow overriding the sbatch script (e.g. evaluate.sbatch)
 SBATCH_SCRIPT=${SBATCH_SCRIPT:-scripts/evaluate.sbatch}
 
-# Build optional sbatch args (e.g. --time override)
+# Build optional sbatch args for eval jobs (e.g. --time override).
+# Only applied to eval jobs; aggregation keeps its own sbatch default.
 SBATCH_EXTRA_ARGS=()
 if [[ -n "${SLURM_TIME:-}" ]]; then
     SBATCH_EXTRA_ARGS+=(--time "$SLURM_TIME")
@@ -79,12 +80,13 @@ for MODEL in "${!MODEL_CHECKPOINTS[@]}"; do
         # Build dependency string: afterok:job1:job2:...
         DEP_STRING=$(IFS=':'; echo "${SPLIT_JOB_IDS[*]}")
 
-        # Submit aggregation job to merge results and upload to W&B
+        # Submit aggregation job to merge results and upload to W&B.
+        # Intentionally omits SBATCH_EXTRA_ARGS so the aggregation keeps the
+        # short --time default from aggregate_splits.sbatch.
         AGG_JOB_ID=$(sbatch --parsable \
             --job-name "eval-${MODEL}-aggregate" \
             --dependency="afterok:${DEP_STRING}" \
             --export=ALL,NUM_SPLITS=$NUM_SPLITS \
-            "${SBATCH_EXTRA_ARGS[@]}" \
             scripts/aggregate_splits.sbatch "$CKPT_PATH" "$MODEL")
         echo "  Aggregation job submitted: job $AGG_JOB_ID (depends on splits)"
     fi
