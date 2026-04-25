@@ -156,6 +156,13 @@ if [ ! -z ${REVISION+x} ]; then
     echo "Using revision=$REVISION"
     MAYBE_REVISION=",revision=$REVISION"
     MAYBE_DOWNLOAD_REVISION="--revision=$REVISION"
+    # Some repos (e.g. HuggingFaceTB/SmolLM3-3B-checkpoints) keep all
+    # checkpoint files on revision branches and leave `main` empty. vLLM
+    # loads the tokenizer separately and does not auto-derive
+    # tokenizer_revision from revision, so AutoTokenizer fetches `main`,
+    # finds no tokenizer.json, and dies with the misleading "need
+    # sentencepiece or tiktoken" error. Pin tokenizer_revision explicitly.
+    MAYBE_TOKENIZER_REVISION=",tokenizer_revision=$REVISION"
 fi
 if [ -z ${TOKENIZER+x} ]; then
     echo "TOKENIZER not set, using TOKENIZER=$MODEL"
@@ -203,7 +210,7 @@ VLLM_MEMORY_FRACTION=0.75
 # export VLLM_DISABLE_CUSTOM_ALL_REDUCE=1
 
 if [[ $LM_EVAL_BACKEND == "vllm" ]]; then
-    COMMON_MODEL_ARGS="$COMMON_MODEL_ARGS,pretrained=$HF_CHECKPOINT_PATH,tokenizer=$TOKENIZER$MAYBE_REVISION,data_parallel_size=$DP,tensor_parallel_size=$MP,gpu_memory_utilization=$VLLM_MEMORY_FRACTION,enable_thinking=False"
+    COMMON_MODEL_ARGS="$COMMON_MODEL_ARGS,pretrained=$HF_CHECKPOINT_PATH,tokenizer=$TOKENIZER$MAYBE_REVISION${MAYBE_TOKENIZER_REVISION:-},data_parallel_size=$DP,tensor_parallel_size=$MP,gpu_memory_utilization=$VLLM_MEMORY_FRACTION,enable_thinking=False"
 elif [[ $LM_EVAL_BACKEND == "megatron_lm" ]]; then
     COMMON_MODEL_ARGS="$COMMON_MODEL_ARGS,load=$MODEL,tokenizer_type=HuggingFaceTokenizer,tokenizer_model=$TOKENIZER$MAYBE_REVISION,devices=4"
     if [[ "$CKPT_ITER" =~ ^[0-9]+$ ]]; then
@@ -281,7 +288,7 @@ if [[ -n "$LM_EVAL_HARNESS_BRANCH" ]]; then
     LM_EVAL_HARNESS_PIP_SPEC="${LM_EVAL_HARNESS_PIP_SPEC}@${LM_EVAL_HARNESS_BRANCH}"
 fi
 
-INSTALL_CMD="pip install --no-cache-dir sentencepiece protobuf && \
+INSTALL_CMD="pip install --no-cache-dir sentencepiece tiktoken protobuf && \
 pip install --no-cache-dir --upgrade \"$LM_EVAL_HARNESS_PIP_SPEC\" && \
 pip install --no-cache-dir --upgrade \
     \"huggingface-hub>=1.3.0,<2.0\" \
@@ -304,10 +311,18 @@ pip install --no-cache-dir --upgrade \
     subset2evaluate \
     \"alpaca-eval>=0.6.2\" \
     \"peft>=0.18.0\" && \
-python -c 'import sentencepiece; print(f\"sentencepiece {sentencepiece.__version__} OK\")'"
+python -c 'import sentencepiece, tiktoken; print(f\"sentencepiece {sentencepiece.__version__} OK\"); print(f\"tiktoken {tiktoken.__version__} OK\")'"
 
 if [[ $LM_EVAL_BACKEND == "megatron_lm" ]]; then
-  INSTALL_CMD="$INSTALL_CMD && pip install megatron-core --no-deps && export MEGATRON_PATH=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM"
+  # The ngc-nemo container ships nvidia-lm-eval (an older 0.4.x lm_eval
+  # whose __init__.py eagerly imports `evaluate`). After we upgrade
+  # transformers to 5.1.0, that eager chain hits a `Backend should be
+  # defined in the BACKENDS_MAPPING. Offending backend: tf` error from
+  # transformers' _LazyModule. Removing nvidia-lm-eval and the stale
+  # /opt/venv lm_eval package forces python to pick up the swiss-ai
+  # harness we installed (which lazy-imports evaluate via _cli/run.py).
+  PRE_INSTALL_CMD="pip uninstall -y nvidia-lm-eval lm-eval lm_eval || true"
+  INSTALL_CMD="$PRE_INSTALL_CMD && $INSTALL_CMD && pip install megatron-core --no-deps && export MEGATRON_PATH=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM"
 fi
 
 if [[ $LM_EVAL_BACKEND == "vllm" ]]; then
