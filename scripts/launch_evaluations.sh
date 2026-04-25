@@ -46,6 +46,7 @@
 #   --splits K           - Split tasks across K parallel nodes per model
 #   --limit N            - Optional argument to pass as --limit to the lm-evaluation-harness, to limit the number of samples per task (default: no limit).
 #   --harness-branch B   - Install lm-evaluation-harness from branch/ref B (default: repo default branch)
+#   --time HH:MM:SS      - Override the Slurm job --time limit (default: from sbatch script)
 #
 # Examples:
 #   # Single HF model, auto-detect everything
@@ -85,6 +86,7 @@ HARNESS_LIMIT=""
 MEGATRON_ITER=""
 SINGLE_TASK=""
 HARNESS_BRANCH=""
+SLURM_TIME_FLAG=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -102,6 +104,7 @@ while [[ $# -gt 0 ]]; do
         --megatron-iter) MEGATRON_ITER="$2";            shift 2 ;;
         --limit) HARNESS_LIMIT="$2";            shift 2 ;;
         --harness-branch) HARNESS_BRANCH="$2";        shift 2 ;;
+        --time)         SLURM_TIME_FLAG="$2";         shift 2 ;;
         *)
             echo "Error: Unknown option '$1'"
             echo "Run with no arguments for usage."
@@ -291,6 +294,7 @@ echo "Apertus Evaluation Launcher"
 echo "  Mode:   $EVAL_MODE"
 [[ "$EVAL_MODE" == "single" ]] && echo "  Task:   $SINGLE_TASK"
 echo "  Splits: $NUM_SPLITS"
+[[ -n "$SLURM_TIME_FLAG" ]] && echo "  Time:   $SLURM_TIME_FLAG"
 
 # --- Few-shot override ---
 [[ -n "$FEWSHOT_FLAG" ]] && export NUM_FEWSHOT="$FEWSHOT_FLAG"
@@ -298,6 +302,7 @@ echo "  Splits: $NUM_SPLITS"
 # --- Harness limit override ---
 [[ -n "$HARNESS_LIMIT" ]] && export HARNESS_LIMIT="$HARNESS_LIMIT"
 [[ -n "$HARNESS_BRANCH" ]] && export LM_EVAL_HARNESS_BRANCH="$HARNESS_BRANCH"
+[[ -n "$SLURM_TIME_FLAG" ]] && export SLURM_TIME="$SLURM_TIME_FLAG"
 
 # --- Dispatch based on model selection mode ---
 
