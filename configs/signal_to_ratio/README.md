@@ -108,8 +108,10 @@ bash scripts/launch_evaluations.sh snr-midtraining --script runners/snr_midtrain
 
 Four tiny end-to-end runs that exercise both backends and both
 single-checkpoint and multi-checkpoint paths. Each generates a temporary
-runner under `runners/snr_test_*.sh`, then launches with `TASKS` set to a
-small task list and `--limit 4` to cap samples per task.
+runner under `runners/snr_test_*.sh`, then launches it via the existing
+`single` mode with `--task` (one task name, or a comma-separated list) and
+`--limit 4` to cap samples per task. No SNR-specific flags or env-var
+overrides — `single` already covers the small-scope case.
 
 `models_test_hf.txt` and `models_test_megatron.txt` each contain one model;
 `--last 1` / `--last 2` controls how many of its checkpoints are evaluated.
@@ -119,41 +121,39 @@ small task list and `--limit 4` to cap samples per task.
 bash scripts/generate_snr_runner.sh \
     --models configs/signal_to_ratio/models_test_hf.txt --last 1 \
     > runners/snr_test_hf_1.sh
-TASKS=hellaswag bash scripts/launch_evaluations.sh snr-midtraining \
-    --script runners/snr_test_hf_1.sh --limit 4
+bash scripts/launch_evaluations.sh single \
+    --script runners/snr_test_hf_1.sh --task hellaswag --limit 4
 
 # 2) 2 HF checkpoints of the same model, 2 tasks
 bash scripts/generate_snr_runner.sh \
     --models configs/signal_to_ratio/models_test_hf.txt --last 2 \
     > runners/snr_test_hf_2.sh
-TASKS=hellaswag,piqa bash scripts/launch_evaluations.sh snr-midtraining \
-    --script runners/snr_test_hf_2.sh --limit 4
+bash scripts/launch_evaluations.sh single \
+    --script runners/snr_test_hf_2.sh --task hellaswag,piqa --limit 4
 
 # 3) 1 Megatron checkpoint (last iter), 1 task
 bash scripts/generate_snr_runner.sh \
     --models configs/signal_to_ratio/models_test_megatron.txt --last 1 \
     > runners/snr_test_meg_1.sh
-TASKS=hellaswag bash scripts/launch_evaluations.sh snr-pretraining \
-    --script runners/snr_test_meg_1.sh --limit 4
+bash scripts/launch_evaluations.sh single \
+    --script runners/snr_test_meg_1.sh --task hellaswag --limit 4
 
 # 4) 2 Megatron checkpoints (last two iters), 2 tasks
 bash scripts/generate_snr_runner.sh \
     --models configs/signal_to_ratio/models_test_megatron.txt --last 2 \
     > runners/snr_test_meg_2.sh
-TASKS=hellaswag,piqa bash scripts/launch_evaluations.sh snr-pretraining \
-    --script runners/snr_test_meg_2.sh --limit 4
+bash scripts/launch_evaluations.sh single \
+    --script runners/snr_test_meg_2.sh --task hellaswag,piqa --limit 4
 ```
 
 Notes:
 
-- `TASKS=...` overrides the mode's default task list. It can be a file path or
-  a comma-separated list of task names — `evaluate.sbatch` handles both.
-- Use `snr-midtraining` (or `snr-pretraining`) for the SmolLM3 base
-  checkpoints so `APPLY_CHAT_TEMPLATE` stays `false`. Use `snr-posttraining`
-  only for Instruct/SFT/DPO checkpoints.
-- After the jobs finish, sanity-check the generated runner once with
-  `bash -n runners/snr_test_hf_1.sh` and inspect W&B at
-  https://wandb.ai/mariagrandury-epflnlp/snr-experiments.
+- `single --task` accepts a single task name or a comma-separated list;
+  `evaluate.sbatch` passes the value straight through to `lm_eval --tasks`.
+- These runs go to the `single`-suffixed W&B project (e.g.
+  `apertus-1.5-post-training-v0.0-single`) rather than `snr-experiments`
+  because they're pipeline checks, not real SNR data points. Sanity-check the
+  generated runner once with `bash -n runners/snr_test_hf_1.sh`.
 
 ## Where outputs go
 
