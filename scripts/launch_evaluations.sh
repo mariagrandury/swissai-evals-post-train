@@ -150,14 +150,8 @@ if [[ -n "$MODEL_PATH" && -n "$SCRIPT_PATH" ]]; then
 fi
 
 # --- Environment defaults ---
-# SNR modes have their own W&B entity/project defaults; seed them before the generic
-# fallbacks below so they only apply when the user hasn't exported overrides.
-if [[ "$EVAL_MODE" == snr-* ]]; then
-    : "${WANDB_ENTITY:=mariagrandury-epflnlp}"
-    : "${WANDB_PROJECT:=snr-experiments}"
-fi
-export WANDB_ENTITY=${WANDB_ENTITY:-apertus}
-export WANDB_PROJECT=${WANDB_PROJECT:-apertus-1.5-post-training-v0.0}
+export WANDB_ENTITY=${WANDB_ENTITY:-mariagrandury-epflnlp}
+export WANDB_PROJECT=${WANDB_PROJECT:-snr-experiments}
 export NUM_SPLITS
 export SBATCH_SCRIPT=${SBATCH_SCRIPT:-scripts/evaluate.sbatch}
 # Global checkpoint iteration override for Megatron checkpoints.

@@ -111,8 +111,6 @@ others, generate a runner from `models_test_hf.txt` /
 `models_test_megatron.txt` first.
 
 ```bash
-WANDB_ENTITY=mariagrandury-epflnlp WANDB_PROJECT=snr-experiments
-
 # 1) 1 HF checkpoint, 1 task — committed runner
 bash scripts/launch_evaluations.sh single \
     --script runners/snr_test.sh --task hellaswag --limit 4 --time 00:15:00
