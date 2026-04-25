@@ -35,10 +35,12 @@ case "$MODEL" in
             | awk '$1 % 2000 == 0' | filter_include | select_lines
         ;;
     https://huggingface.co/*)
-        python3 - "${MODEL#https://huggingface.co/}" <<'PY' | filter_include | select_lines
+        # sort -V so step-40000 precedes step-1000000 (alphabetic sort would flip them,
+        # making --total picks non-monotonic in step count).
+        python3 - "${MODEL#https://huggingface.co/}" <<'PY' | sort -V | filter_include | select_lines
 import json, sys, urllib.request
 r = json.loads(urllib.request.urlopen(f'https://huggingface.co/api/models/{sys.argv[1]}/refs').read())
-for b in sorted(x['name'] for x in r['branches'] if x['name']!='main'): print(b)
+for b in (x['name'] for x in r['branches'] if x['name']!='main'): print(b)
 PY
         ;;
     *) echo "Unrecognized format: $MODEL (want /iopsstor*, /capstor*, or https://huggingface.co/...)" >&2; exit 1 ;;
