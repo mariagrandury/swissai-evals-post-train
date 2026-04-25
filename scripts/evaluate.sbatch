@@ -170,9 +170,12 @@ if [ -z ${TOKENIZER+x} ]; then
 fi
 
 
-# Use only model parallel because of vLLM
-MP=$GPUS_PER_NODE
-echo "Using model size ~${SIZE}B, model parallel size of $MP"
+# Tensor-parallel size. Default to all GPUs on the node (legacy behavior, right
+# for big models that don't fit on one GPU). Override with TP=1 for small models
+# where DP=GPUS_PER_NODE/TP gives near-linear throughput on batch loglikelihood
+# scoring (no per-step all-reduce).
+MP=${TP:-$GPUS_PER_NODE}
+echo "Using model size ~${SIZE}B, tensor parallel size of $MP"
 
 # Prepare logs root.
 RUN_ROOT=$LOGS_ROOT/$WANDB_ENTITY/$WANDB_PROJECT/$NAME
@@ -212,7 +215,15 @@ VLLM_MEMORY_FRACTION=0.75
 if [[ $LM_EVAL_BACKEND == "vllm" ]]; then
     COMMON_MODEL_ARGS="$COMMON_MODEL_ARGS,pretrained=$HF_CHECKPOINT_PATH,tokenizer=$TOKENIZER$MAYBE_REVISION${MAYBE_TOKENIZER_REVISION:-},data_parallel_size=$DP,tensor_parallel_size=$MP,gpu_memory_utilization=$VLLM_MEMORY_FRACTION,enable_thinking=False"
 elif [[ $LM_EVAL_BACKEND == "megatron_lm" ]]; then
-    COMMON_MODEL_ARGS="$COMMON_MODEL_ARGS,load=$MODEL,tokenizer_type=HuggingFaceTokenizer,tokenizer_model=$TOKENIZER$MAYBE_REVISION,devices=4"
+    # `--dist-ckpt-strictness=log_unexpected` tells Megatron's distributed
+    # checkpoint loader to log (instead of raise) on missing keys like
+    # `q_layernorm._extra_state` — these are TE bookkeeping fields the
+    # current Megatron-LM expects but older checkpoints don't carry. The
+    # default ASSUME_OK_UNEXPECTED delegates to the underlying strategy,
+    # which fatally raises in torch.distributed.checkpoint's planner. We
+    # use `=` (not space) so the token survives bash word-splitting in
+    # CMD_BASE. Real model weights still load unchanged.
+    COMMON_MODEL_ARGS="$COMMON_MODEL_ARGS,load=$MODEL,tokenizer_type=HuggingFaceTokenizer,tokenizer_model=$TOKENIZER$MAYBE_REVISION,devices=4,extra_args=--dist-ckpt-strictness=log_unexpected"
     if [[ "$CKPT_ITER" =~ ^[0-9]+$ ]]; then
         COMMON_MODEL_ARGS="$COMMON_MODEL_ARGS,ckpt_step=$CKPT_ITER"
     elif [[ "$CKPT_ITER" == "latest" ]]; then
@@ -232,8 +243,6 @@ HARNESS_EVAL_DIR=$HARNESS_DIR/eval_$(date +%Y%m%d_%H%M%S)_$SLURM_JOBID
 COMMON_EVAL_ARGS=(
 	--trust_remote_code
 	--batch_size $BS
-	--tasks $TASKS
-	--output_path $HARNESS_EVAL_DIR
 	--max_batch_size 32
 	--log_samples
 	--write_out
@@ -241,6 +250,7 @@ COMMON_EVAL_ARGS=(
     # --cache_requests true - causes problems for long model names due to file name length limits
     --gen_kwargs max_gen_toks=$MAX_NEW_TOKENS
 )
+# --tasks and --output_path are appended per task by scripts/_run_per_task.sh.
 
 if [[ -n "${HARNESS_LIMIT}" ]]; then
     COMMON_EVAL_ARGS+=(--limit $HARNESS_LIMIT)
@@ -314,56 +324,68 @@ pip install --no-cache-dir --upgrade \
 python -c 'import sentencepiece, tiktoken; print(f\"sentencepiece {sentencepiece.__version__} OK\"); print(f\"tiktoken {tiktoken.__version__} OK\")'"
 
 if [[ $LM_EVAL_BACKEND == "megatron_lm" ]]; then
-  # The ngc-nemo container ships nvidia-lm-eval (an older 0.4.x lm_eval
-  # whose __init__.py eagerly imports `evaluate`). After we upgrade
-  # transformers to 5.1.0, that eager chain hits a `Backend should be
-  # defined in the BACKENDS_MAPPING. Offending backend: tf` error from
-  # transformers' _LazyModule. Removing nvidia-lm-eval and the stale
-  # /opt/venv lm_eval package forces python to pick up the swiss-ai
-  # harness we installed (which lazy-imports evaluate via _cli/run.py).
-  PRE_INSTALL_CMD="pip uninstall -y nvidia-lm-eval lm-eval lm_eval || true"
-  INSTALL_CMD="$PRE_INSTALL_CMD && $INSTALL_CMD && pip install megatron-core --no-deps && export MEGATRON_PATH=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM"
+  # The local Megatron-LM enforces strict checkpoint loading and chokes on
+  # transformer-engine `_extra_state` fields (fp8 amax history etc.) that
+  # are missing from older checkpoints — known upstream issue. The harness
+  # passes strict=True at lm_eval/models/megatron_lm.py:541; flip it to
+  # strict=False so missing _extra_state keys become warnings instead of
+  # fatal RuntimeErrors. Safe for bf16 eval: real weights still load, only
+  # TE bookkeeping is skipped.
+  PATCH_HARNESS_CMD="LM_EVAL_DIR=\$(python -c 'import lm_eval, os; print(os.path.dirname(lm_eval.__file__))') && \
+sed -i 's/load_checkpoint(self._model, None, None, strict=True)/load_checkpoint(self._model, None, None, strict=False)/' \"\$LM_EVAL_DIR/models/megatron_lm.py\" && \
+echo \"Patched \$LM_EVAL_DIR/models/megatron_lm.py: load_checkpoint strict=True -> strict=False\""
+  INSTALL_CMD="$INSTALL_CMD && pip install megatron-core --no-deps && $PATCH_HARNESS_CMD && export MEGATRON_PATH=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM"
 fi
 
 if [[ $LM_EVAL_BACKEND == "vllm" ]]; then
-    CMD="lm_eval --model $LM_EVAL_BACKEND --model_args=$COMMON_MODEL_ARGS ${COMMON_EVAL_ARGS[@]}"
+    CMD_BASE="lm_eval --model $LM_EVAL_BACKEND --model_args=$COMMON_MODEL_ARGS ${COMMON_EVAL_ARGS[@]}"
 elif [[ $LM_EVAL_BACKEND == "hf" ]]; then
-    CMD="accelerate launch --num_processes=4  -m lm_eval --model $LM_EVAL_BACKEND --model_args=$COMMON_MODEL_ARGS ${COMMON_EVAL_ARGS[@]}"
+    CMD_BASE="accelerate launch --num_processes=4  -m lm_eval --model $LM_EVAL_BACKEND --model_args=$COMMON_MODEL_ARGS ${COMMON_EVAL_ARGS[@]}"
 elif [[ $LM_EVAL_BACKEND == "megatron_lm" ]]; then
-    CMD="torchrun --nproc-per-node=4 -m lm_eval --model megatron_lm --model_args=$COMMON_MODEL_ARGS ${COMMON_EVAL_ARGS[@]}"
+    CMD_BASE="torchrun --nproc-per-node=4 -m lm_eval --model megatron_lm --model_args=$COMMON_MODEL_ARGS ${COMMON_EVAL_ARGS[@]}"
 fi
+# scripts/_run_per_task.sh reads CMD_BASE/TASKS/HARNESS_EVAL_DIR from env.
+export CMD_BASE TASKS HARNESS_EVAL_DIR
 
 echo "Installation command: $INSTALL_CMD"
-echo "Final command: $CMD"
+echo "Per-task command base: $CMD_BASE"
 
 # Start timing for lines 182-189
 echo "Starting timing for installation and evaluation..."
 START_TIME=$(date +%s)
 
+# The container's WORKDIR is /workspace/vllm, not our repo. Cd into the
+# repo on the host side so `./scripts/_run_per_task.sh` resolves and the
+# `python -m scripts.alignment.*` calls inside it find their package.
+REPO_DIR="$PWD"
+
 if [[ $LM_EVAL_BACKEND == "megatron_lm" ]]; then
-  srun -n 1 --mpi=pmix -ul --environment=/capstor/store/cscs/swissai/a139/containers/ngc_25-11-nemo-alps3.toml bash -lc "
+  srun -n 1 --mpi=pmix -ul --environment=./containers/env_vllm.toml bash -lc "
+    cd '$REPO_DIR'
     set -euo pipefail
     unset SSL_CERT_FILE
 
     $INSTALL_CMD
     # Make torch CUDA libs discoverable for vllm._C import
     export LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/torch/lib:\${LD_LIBRARY_PATH:-}
-    $CMD
+    bash ./scripts/_run_per_task.sh
     "
 elif [[ $LM_EVAL_BACKEND == "vllm" ]]; then
   # vLLM needs to run with a single process that manages all GPUs, so we run the install and eval in the same command to avoid issues with environment persistence across srun calls
   srun -n 1 --mpi=pmix -ul --environment=./containers/env_vllm.toml bash -lc "
+    cd '$REPO_DIR'
     set -euo pipefail
     unset SSL_CERT_FILE
 
     $INSTALL_CMD
     # Make torch CUDA libs discoverable for vllm._C import
     export LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/torch/lib:\${LD_LIBRARY_PATH:-}
-    $CMD
+    bash ./scripts/_run_per_task.sh
     "
 else
   # hf (via accelerate)
   srun -n 1 --mpi=pmix -ul --environment=./containers/env.toml --export=ALL,HF_TOKEN,HF_HOME,WANDB_API_KEY bash -lc "
+    cd '$REPO_DIR'
     set -euo pipefail
     unset SSL_CERT_FILE
 
@@ -372,7 +394,7 @@ else
     # Make torch CUDA libs discoverable for vllm._C import - is just ignored for Huggingface
     export LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/torch/lib:\${LD_LIBRARY_PATH:-}
 
-    $CMD
+    bash ./scripts/_run_per_task.sh
     "
 fi
 
