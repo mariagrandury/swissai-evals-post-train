@@ -316,8 +316,8 @@ Primary SLURM job script for HuggingFace-compatible model evaluation.
 | `NUM_FEWSHOT` | (unset) | Global few-shot override |
 | `NUM_SPLITS` / `SPLIT_INDEX` | `1` / `0` | Task splitting (set automatically by launcher) |
 | `LOGS_ROOT` | `/capstor/.../eval-logs` | Root directory for evaluation logs |
-| `WANDB_ENTITY` | `mariagrandury-epflnlp` | W&B entity |
-| `WANDB_PROJECT` | `snr-experiments` | W&B project |
+| `WANDB_ENTITY` | `apertus` | W&B entity |
+| `WANDB_PROJECT` | `swissai-evals-test` | W&B project |
 
 The script auto-detects RULER long-context tasks and adjusts `MAX_LENGTH` and `max_model_len` accordingly.
 
