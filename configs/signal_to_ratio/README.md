@@ -79,15 +79,15 @@ bash configs/signal_to_ratio/check_checkpoints.sh configs/signal_to_ratio/models
 ```bash
 # Pretraining
 bash scripts/launch_evaluations.sh snr-pretraining \
-    --script runners/snr_pretraining.sh --splits 10
+    --script runners/snr_pretraining.sh --splits 10 --time 04:00:00
 
 # Midtraining
 bash scripts/launch_evaluations.sh snr-midtraining \
-    --script runners/snr_midtraining.sh --splits 5
+    --script runners/snr_midtraining.sh --splits 5 --time 04:00:00
 
 # Posttraining
 bash scripts/launch_evaluations.sh snr-posttraining \
-    --script runners/snr_posttraining.sh --splits 2
+    --script runners/snr_posttraining.sh --splits 2 --time 04:00:00
 ```
 
 Useful flags (all forwarded verbatim to the normal eval path — nothing SNR-specific):
@@ -96,13 +96,7 @@ Useful flags (all forwarded verbatim to the normal eval path — nothing SNR-spe
 - `--limit N` — cap samples per task (quick smoke tests).
 - `--harness-branch B` — install `lm-evaluation-harness` from a specific branch.
 - `--num-fewshot N` — override few-shot count.
-
-Job time limit
-
-```bash
-export SLURM_TIME=02:00:00
-bash scripts/launch_evaluations.sh snr-midtraining --script runners/snr_midtraining.sh --splits 5
-```
+- `--time HH:MM:SS` — override the Slurm `--time` limit on eval jobs (the aggregation job keeps its own short default).
 
 ### Smoke tests
 
@@ -121,28 +115,28 @@ WANDB_ENTITY=mariagrandury-epflnlp WANDB_PROJECT=snr-experiments
 
 # 1) 1 HF checkpoint, 1 task — committed runner
 bash scripts/launch_evaluations.sh single \
-    --script runners/snr_test.sh --task hellaswag --limit 4
+    --script runners/snr_test.sh --task hellaswag --limit 4 --time 00:15:00
 
 # 2) 2 HF checkpoints of the same model, 2 tasks
 bash scripts/generate_snr_runner.sh \
     --models configs/signal_to_ratio/models_test_hf.txt --last 2 \
     > runners/snr_test_hf_2.sh
 bash scripts/launch_evaluations.sh single \
-    --script runners/snr_test_hf_2.sh --task hellaswag,piqa --limit 4
+    --script runners/snr_test_hf_2.sh --task hellaswag,piqa --limit 4 --time 00:15:00
 
 # 3) 1 Megatron checkpoint (last iter), 1 task
 bash scripts/generate_snr_runner.sh \
     --models configs/signal_to_ratio/models_test_megatron.txt --last 1 \
     > runners/snr_test_meg_1.sh
 bash scripts/launch_evaluations.sh single \
-    --script runners/snr_test_meg_1.sh --task hellaswag --limit 4
+    --script runners/snr_test_meg_1.sh --task hellaswag --limit 4 --time 00:15:00
 
 # 4) 2 Megatron checkpoints (last two iters), 2 tasks
 bash scripts/generate_snr_runner.sh \
     --models configs/signal_to_ratio/models_test_megatron.txt --last 2 \
     > runners/snr_test_meg_2.sh
 bash scripts/launch_evaluations.sh single \
-    --script runners/snr_test_meg_2.sh --task hellaswag,piqa --limit 4
+    --script runners/snr_test_meg_2.sh --task hellaswag,piqa --limit 4 --time 00:15:00
 ```
 
 `models_test_megatron.txt` already points at
@@ -237,5 +231,5 @@ launcher's single-model path):
 # Megatron
 bash scripts/launch_evaluations.sh snr-pretraining \
     --model /iopsstor/.../apertus-175M-.../checkpoints \
-    --megatron-iter 10000 --splits 2
+    --megatron-iter 10000 --splits 2 --time 04:00:00
 ```
