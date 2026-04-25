@@ -1,6 +1,6 @@
 #!/bin/bash
 # SNR stage runner - GENERATED from configs/signal_to_ratio/models_midtraining_hf.txt (selection: --last 3)
-# Regenerate: bash scripts/generate_snr_runner.sh --models configs/signal_to_ratio/models_midtraining_hf.txt --last 3 > $0
+# Regenerate: bash scripts/generate_snr_runner.sh --models configs/signal_to_ratio/models_midtraining_hf.txt --last 3 -o $0
 
 # ===== HuggingFace revisions (REVISION is singleton; loop per branch) =====
 unset MODEL_CHECKPOINTS MODEL_ITERATIONS

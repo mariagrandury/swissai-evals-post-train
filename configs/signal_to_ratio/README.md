@@ -27,7 +27,7 @@ Scripts:
 | Script                                                                 | Purpose                                                                                                               |
 | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | [scripts/list_checkpoints.sh](../../scripts/list_checkpoints.sh)       | Enumerate Megatron iters (multiples of 2000) or HF non-main branches for one model. Pure selection, prints to stdout. |
-| [scripts/generate_snr_runner.sh](../../scripts/generate_snr_runner.sh) | Read a models file, enumerate each, emit a stage runner to stdout.                                                    |
+| [scripts/generate_snr_runner.sh](../../scripts/generate_snr_runner.sh) | Read a models file, enumerate each, emit a stage runner (stdout, or `-o FILE` which creates parent dirs as needed).   |
 | [scripts/launch_evaluations.sh](../../scripts/launch_evaluations.sh)   | Unchanged entry point. Use `--script runners/snr_<stage>.sh`.                                                         |
 
 ## Generate runners
@@ -40,17 +40,17 @@ cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train && git pull
 # Pretraining (Megatron) - N evenly-spaced iters across each run
 bash scripts/generate_snr_runner.sh \
     --models configs/signal_to_ratio/models_pretraining_custom.txt --total 10 \
-    > runners/snr_pretraining.sh
+    -o runners/snr_pretraining.sh
 
 # Midtraining (HuggingFace) - evenly-spaced branches
 bash scripts/generate_snr_runner.sh \
     --models configs/signal_to_ratio/models_midtraining_hf.txt --total 5 \
-    > runners/snr_midtraining.sh
+    -o runners/snr_midtraining.sh
 
 # Posttraining (HuggingFace) - last few branches (most repos have only 0-8)
 bash scripts/generate_snr_runner.sh \
     --models configs/signal_to_ratio/models_posttraining_hf.txt --last 3 \
-    > runners/snr_posttraining.sh
+    -o runners/snr_posttraining.sh
 ```
 
 Selection flags:
@@ -118,21 +118,21 @@ bash scripts/launch_evaluations.sh single \
 # 2) 2 HF checkpoints of the same model, 2 tasks
 bash scripts/generate_snr_runner.sh \
     --models configs/signal_to_ratio/models_test_hf.txt --last 2 \
-    > runners/snr_test_hf_2.sh
+    -o runners/snr_test_hf_2.sh
 bash scripts/launch_evaluations.sh single \
     --script runners/snr_test_hf_2.sh --task hellaswag,piqa --limit 4 --time 00:15:00
 
 # 3) 1 Megatron checkpoint (last iter), 1 task
 bash scripts/generate_snr_runner.sh \
     --models configs/signal_to_ratio/models_test_megatron.txt --last 1 \
-    > runners/snr_test_meg_1.sh
+    -o runners/snr_test_meg_1.sh
 bash scripts/launch_evaluations.sh single \
     --script runners/snr_test_meg_1.sh --task hellaswag --limit 4 --time 00:15:00
 
 # 4) 2 Megatron checkpoints (last two iters), 2 tasks
 bash scripts/generate_snr_runner.sh \
     --models configs/signal_to_ratio/models_test_megatron.txt --last 2 \
-    > runners/snr_test_meg_2.sh
+    -o runners/snr_test_meg_2.sh
 bash scripts/launch_evaluations.sh single \
     --script runners/snr_test_meg_2.sh --task hellaswag,piqa --limit 4 --time 00:15:00
 ```

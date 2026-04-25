@@ -1,21 +1,35 @@
 #!/bin/bash
-# Generate a self-contained SNR stage runner from a models file (stdout).
-# Usage: generate_snr_runner.sh --models <file> (--last N | --total T) > runners/snr_<stage>.sh
+# Generate a self-contained SNR stage runner from a models file.
+# Usage: generate_snr_runner.sh --models <file> (--last N | --total T) [-o runners/snr_<stage>.sh]
+# Without -o the runner is written to stdout. With -o the parent directory is
+# created if missing and the file is (over)written.
 # Then: bash scripts/launch_evaluations.sh snr-<stage> --script runners/snr_<stage>.sh [flags]
 set -euo pipefail
 
 LIST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/list_checkpoints.sh"
 
-MODELS_FILE=""; MODE=""; COUNT=""
+usage() {
+    echo "Usage: $0 --models <file> (--last N | --total T) [-o|--output FILE]" >&2
+    exit 1
+}
+
+MODELS_FILE=""; MODE=""; COUNT=""; OUTPUT=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --models)         MODELS_FILE="$2"; shift 2 ;;
         --last|--total)   MODE="$1"; COUNT="$2"; shift 2 ;;
-        *) echo "Usage: $0 --models <file> (--last N | --total T)" >&2; exit 1 ;;
+        -o|--output)      OUTPUT="$2"; shift 2 ;;
+        *) usage ;;
     esac
 done
-[[ -f "$MODELS_FILE" && -n "$MODE" ]] \
-    || { echo "Usage: $0 --models <file> (--last N | --total T)" >&2; exit 1; }
+[[ -f "$MODELS_FILE" && -n "$MODE" ]] || usage
+
+OUT_TMP=""
+if [[ -n "$OUTPUT" ]]; then
+    mkdir -p -- "$(dirname -- "$OUTPUT")"
+    OUT_TMP="$(mktemp -- "${OUTPUT}.XXXXXX")"
+    exec >"$OUT_TMP"
+fi
 
 derive_name() {
     local m="${1#https://huggingface.co/}"
@@ -23,7 +37,8 @@ derive_name() {
 }
 
 MEG=$(mktemp); HF=$(mktemp)
-trap 'rm -f "$MEG" "$HF"' EXIT
+cleanup() { rm -f "$MEG" "$HF" "$OUT_TMP"; }
+trap cleanup EXIT
 
 while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
@@ -51,7 +66,7 @@ done < "$MODELS_FILE"
 
 echo "#!/bin/bash"
 echo "# SNR stage runner - GENERATED from $MODELS_FILE (selection: $MODE $COUNT)"
-echo "# Regenerate: bash scripts/generate_snr_runner.sh --models $MODELS_FILE $MODE $COUNT > \$0"
+echo "# Regenerate: bash scripts/generate_snr_runner.sh --models $MODELS_FILE $MODE $COUNT -o \$0"
 
 if [[ -s "$MEG" ]]; then
     cat <<'EOF'
@@ -95,4 +110,9 @@ for ENTRY in "${HF_ENTRIES[@]}"; do
 done
 unset REVISION MODEL_CHECKPOINTS
 EOF
+fi
+
+if [[ -n "$OUT_TMP" ]]; then
+    mv -- "$OUT_TMP" "$OUTPUT"
+    OUT_TMP=""
 fi
