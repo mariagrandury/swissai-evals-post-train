@@ -1,8 +1,8 @@
 #!/bin/bash
-# Check which models from models_pretraining_custom.txt have checkpoints available.
+# Check which models from models_pretraining_custom_all.txt have checkpoints available.
 # bash configs/signal_to_ratio/check_checkpoints.sh
 
-MODELS_FILE="${1:-configs/signal_to_ratio/models_pretraining_custom.txt}"
+MODELS_FILE="${1:-configs/signal_to_ratio/models_pretraining_custom_all.txt}"
 
 if [[ ! -f "$MODELS_FILE" ]]; then
     echo "Error: Models file not found: $MODELS_FILE"
