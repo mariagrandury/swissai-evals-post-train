@@ -104,15 +104,56 @@ export SLURM_TIME=02:00:00
 bash scripts/launch_evaluations.sh snr-midtraining --script runners/snr_midtraining.sh --splits 5
 ```
 
-Quick smoke test end-to-end (tiny, fast):
+### Smoke tests
+
+Four tiny end-to-end runs that exercise both backends and both
+single-checkpoint and multi-checkpoint paths. Each generates a temporary
+runner under `runners/snr_test_*.sh`, then launches with `TASKS` set to a
+small task list and `--limit 4` to cap samples per task.
+
+`models_test_hf.txt` and `models_test_megatron.txt` each contain one model;
+`--last 1` / `--last 2` controls how many of its checkpoints are evaluated.
 
 ```bash
+# 1) 1 HF checkpoint, 1 task  (SmolLM3-3B-checkpoints, base model)
 bash scripts/generate_snr_runner.sh \
     --models configs/signal_to_ratio/models_test_hf.txt --last 1 \
-    > runners/snr_test.sh
-bash scripts/launch_evaluations.sh snr-posttraining \
-    --script runners/snr_test.sh --limit 2
+    > runners/snr_test_hf_1.sh
+TASKS=hellaswag bash scripts/launch_evaluations.sh snr-midtraining \
+    --script runners/snr_test_hf_1.sh --limit 4
+
+# 2) 2 HF checkpoints of the same model, 2 tasks
+bash scripts/generate_snr_runner.sh \
+    --models configs/signal_to_ratio/models_test_hf.txt --last 2 \
+    > runners/snr_test_hf_2.sh
+TASKS=hellaswag,piqa bash scripts/launch_evaluations.sh snr-midtraining \
+    --script runners/snr_test_hf_2.sh --limit 4
+
+# 3) 1 Megatron checkpoint (last iter), 1 task
+bash scripts/generate_snr_runner.sh \
+    --models configs/signal_to_ratio/models_test_megatron.txt --last 1 \
+    > runners/snr_test_meg_1.sh
+TASKS=hellaswag bash scripts/launch_evaluations.sh snr-pretraining \
+    --script runners/snr_test_meg_1.sh --limit 4
+
+# 4) 2 Megatron checkpoints (last two iters), 2 tasks
+bash scripts/generate_snr_runner.sh \
+    --models configs/signal_to_ratio/models_test_megatron.txt --last 2 \
+    > runners/snr_test_meg_2.sh
+TASKS=hellaswag,piqa bash scripts/launch_evaluations.sh snr-pretraining \
+    --script runners/snr_test_meg_2.sh --limit 4
 ```
+
+Notes:
+
+- `TASKS=...` overrides the mode's default task list. It can be a file path or
+  a comma-separated list of task names — `evaluate.sbatch` handles both.
+- Use `snr-midtraining` (or `snr-pretraining`) for the SmolLM3 base
+  checkpoints so `APPLY_CHAT_TEMPLATE` stays `false`. Use `snr-posttraining`
+  only for Instruct/SFT/DPO checkpoints.
+- After the jobs finish, sanity-check the generated runner once with
+  `bash -n runners/snr_test_hf_1.sh` and inspect W&B at
+  https://wandb.ai/mariagrandury-epflnlp/snr-experiments.
 
 ## Where outputs go
 

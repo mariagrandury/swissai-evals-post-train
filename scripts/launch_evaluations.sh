@@ -225,11 +225,12 @@ case "$EVAL_MODE" in
         ;;
     "snr-pretraining"|"snr-midtraining")
         # Midtraining checkpoints are still base models; evaluate them with the
-        # same pretraining task set.
-        export TASKS=./configs/signal_to_ratio/tasks_pretraining.txt
+        # same pretraining task set. Honour a pre-set TASKS (file path or
+        # comma-separated task list) so smoke tests can pass `TASKS=hellaswag`.
+        export TASKS=${TASKS:-./configs/signal_to_ratio/tasks_pretraining.txt}
         ;;
     "snr-posttraining")
-        export TASKS=./configs/signal_to_ratio/tasks_posttraining.txt
+        export TASKS=${TASKS:-./configs/signal_to_ratio/tasks_posttraining.txt}
         # Posttraining checkpoints are Instruct/SFT/DPO models; tasks like
         # ifeval, humaneval_instruct, mbpp_instruct, gsm8k_cot require a chat
         # template to produce meaningful results. The --chat-template /
