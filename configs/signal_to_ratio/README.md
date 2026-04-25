@@ -161,30 +161,41 @@ Where `<model_name>` is:
 - HuggingFace: `<base>-<branch>` e.g. `Apertus-8B-2509-step1750000-tokens7652B`
 
 ```bash
-cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/logs/
-
 # Tail the latest log across all eval jobs
-ls -t eval-*.out | head -1 | xargs tail -100
+cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/logs/ && ls -t eval-*.out | head -1 | xargs tail -100
 
 # Tail a specific model
-tail -100 eval-SmolLM3-3B-checkpoints-stage3-step-4720000_1831506.out
+cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/logs/ && tail -100 eval-SmolLM3-3B-checkpoints-stage3-step-4720000_1831506.out
 
-# Errors only
-ls -t eval-*.err | head -1 | xargs tail -100
+# Errors only — latest .err across all eval jobs
+cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/logs/ && ls -t eval-*.err | head -1 | xargs tail -100
 ```
 
 ### Harness + W&B logs (per checkpoint)
 
-`$LOGS_ROOT/$WANDB_ENTITY/$WANDB_PROJECT/<model_name>/` where defaults for SNR are:
+`$LOGS_ROOT/$WANDB_ENTITY/$WANDB_PROJECT/<model_name>/harness/eval_<timestamp>_<jobid>/`
+where defaults for SNR are:
 
 - `LOGS_ROOT=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/eval_logs`
   (see [scripts/evaluate.sbatch:69](../../scripts/evaluate.sbatch#L69))
 - `WANDB_ENTITY=mariagrandury-epflnlp`
 - `WANDB_PROJECT=snr-experiments`
 
+The harness writes one `results_<timestamp>.json` per run plus per-task
+`samples_<task>_<timestamp>.jsonl` files alongside it.
+
 ```bash
-cd /iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/eval_logs/mariagrandury-epflnlp/snr-experiments/
-ls -t | head -20
+# List the most recent checkpoint dirs
+cd /iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/eval_logs/mariagrandury-epflnlp/snr-experiments/ && ls -t | head -20
+
+# Latest eval dir for a specific checkpoint
+cd /iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/eval_logs/mariagrandury-epflnlp/snr-experiments/<model_name>/harness/ && ls -t | head -5
+
+# Cat the aggregated results JSON from the latest eval of a checkpoint
+cd /iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/eval_logs/mariagrandury-epflnlp/snr-experiments/<model_name>/harness/ && cat "$(ls -td eval_*/ | head -1)"results_*.json
+
+# Tail the per-task samples file (e.g. hellaswag) from the latest eval
+cd /iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/eval_logs/mariagrandury-epflnlp/snr-experiments/<model_name>/harness/ && ls -t "$(ls -td eval_*/ | head -1)"samples_hellaswag_*.jsonl | head -1 | xargs tail -20
 ```
 
 ### Weights & Biases
@@ -202,8 +213,7 @@ squeue --me --noheader -o "%.10i %.30j %.2t %.10M %.6D %R" | grep eval-
 Tail the latest failing job:
 
 ```bash
-cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/logs/
-ls -t eval-*.err | head -1 | xargs tail -60
+cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/logs/ && ls -t eval-*.err | head -1 | xargs tail -60
 ```
 
 Sanity-check a generated runner before submitting:
