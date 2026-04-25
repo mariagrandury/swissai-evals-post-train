@@ -8,14 +8,19 @@ emerges across training.
 Two steps, cleanly separated:
 
 1. **Generate** a stage runner from a models file. A runner is a plain bash file in
-   `runners/` that declares `MODEL_CHECKPOINTS` (+ `MODEL_ITERATIONS` for Megatron)
-   and sources `runners/hf_base_runner.sh` — identical idiom to the existing
-   `runners/hf_eval_multiple_*.sh` files. Commit it so the evaluated-checkpoint
-   snapshot is version-controlled.
+   `runners/` that declares `MODEL_CHECKPOINTS` and sources
+   `runners/hf_base_runner.sh` — identical idiom to the existing
+   `runners/hf_eval_multiple_*.sh` files. Megatron keys embed the iter as
+   `<base>-iter<N>`; the shared runner parses it directly. Commit the runner so
+   the evaluated-checkpoint snapshot is version-controlled.
 2. **Launch** with the standard `launch_evaluations.sh --script …` entry point.
-   The new `snr-pretraining` / `snr-midtraining` / `snr-posttraining` modes just
-   set `TASKS` to the right `tasks_*.txt` and switch the W&B defaults to
-   `mariagrandury-epflnlp/snr-experiments`.
+   The new `snr-pretraining` / `snr-midtraining` / `snr-posttraining` modes set
+   `TASKS` to the right `tasks_*.txt` (pretraining and midtraining share
+   `tasks_pretraining.txt` — both are base-model evaluations) and switch the
+   W&B defaults to `mariagrandury-epflnlp/snr-experiments`. `snr-posttraining`
+   additionally defaults `APPLY_CHAT_TEMPLATE=true` because the task set
+   (ifeval, humaneval_instruct, …) requires a chat template on Instruct/SFT
+   models; pass `--no-chat-template` to override.
 
 Scripts:
 
@@ -99,15 +104,51 @@ export SLURM_TIME=02:00:00
 bash scripts/launch_evaluations.sh snr-midtraining --script runners/snr_midtraining.sh --splits 5
 ```
 
-Quick smoke test end-to-end (tiny, fast):
+### Smoke tests
+
+Tiny end-to-end runs through the existing `single` mode (one or
+comma-separated `--task` values, `--limit 4` to cap samples per task). The
+`WANDB_*` prefix routes results into the SNR W&B family (`single` mode
+appends `-single` to the project name, so they land in
+`snr-experiments-single` and stay separate from real sweep data).
+
+`runners/snr_test.sh` (committed) covers the simplest HF case; for the
+others, generate a runner from `models_test_hf.txt` /
+`models_test_megatron.txt` first.
 
 ```bash
+WANDB_ENTITY=mariagrandury-epflnlp WANDB_PROJECT=snr-experiments
+
+# 1) 1 HF checkpoint, 1 task — committed runner
+bash scripts/launch_evaluations.sh single \
+    --script runners/snr_test.sh --task hellaswag --limit 4
+
+# 2) 2 HF checkpoints of the same model, 2 tasks
 bash scripts/generate_snr_runner.sh \
-    --models configs/signal_to_ratio/models_test_hf.txt --last 1 \
-    > runners/snr_test.sh
-bash scripts/launch_evaluations.sh snr-posttraining \
-    --script runners/snr_test.sh --limit 2
+    --models configs/signal_to_ratio/models_test_hf.txt --last 2 \
+    > runners/snr_test_hf_2.sh
+bash scripts/launch_evaluations.sh single \
+    --script runners/snr_test_hf_2.sh --task hellaswag,piqa --limit 4
+
+# 3) 1 Megatron checkpoint (last iter), 1 task
+bash scripts/generate_snr_runner.sh \
+    --models configs/signal_to_ratio/models_test_megatron.txt --last 1 \
+    > runners/snr_test_meg_1.sh
+bash scripts/launch_evaluations.sh single \
+    --script runners/snr_test_meg_1.sh --task hellaswag --limit 4
+
+# 4) 2 Megatron checkpoints (last two iters), 2 tasks
+bash scripts/generate_snr_runner.sh \
+    --models configs/signal_to_ratio/models_test_megatron.txt --last 2 \
+    > runners/snr_test_meg_2.sh
+bash scripts/launch_evaluations.sh single \
+    --script runners/snr_test_meg_2.sh --task hellaswag,piqa --limit 4
 ```
+
+`models_test_megatron.txt` already points at
+`/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/Meg-Runs/data-mix-small/apertus-350M-fwEdu60-fw240-seed1904/checkpoints/`,
+so cases 3 and 4 just work. Sanity-check a generated runner once with
+`bash -n runners/snr_test_meg_2.sh` before the first launch.
 
 ## Where outputs go
 

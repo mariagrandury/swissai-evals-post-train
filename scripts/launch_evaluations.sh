@@ -231,6 +231,11 @@ case "$EVAL_MODE" in
         ;;
     "snr-posttraining")
         export TASKS=./configs/signal_to_ratio/tasks_posttraining.txt
+        # Posttraining checkpoints are Instruct/SFT/DPO models; tasks like
+        # ifeval, humaneval_instruct, mbpp_instruct, gsm8k_cot require a chat
+        # template to produce meaningful results. The --chat-template /
+        # --no-chat-template flags still override this.
+        export APPLY_CHAT_TEMPLATE=${APPLY_CHAT_TEMPLATE:-true}
         ;;
 esac
 
