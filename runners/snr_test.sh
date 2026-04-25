@@ -1,6 +1,6 @@
 #!/bin/bash
-# SNR stage runner - GENERATED from configs/signal_to_ratio/models_posttraining_hf.txt (selection: --last 3)
-# Regenerate: bash scripts/generate_snr_runner.sh --models configs/signal_to_ratio/models_posttraining_hf.txt --last 3 > $0
+# SNR stage runner - GENERATED from configs/signal_to_ratio/models_test_hf.txt (selection: --last 1)
+# Regenerate: bash scripts/generate_snr_runner.sh --models configs/signal_to_ratio/models_test_hf.txt --last 1 > $0
 
 # ===== HuggingFace revisions (REVISION is singleton; loop per branch) =====
 unset MODEL_CHECKPOINTS MODEL_ITERATIONS
@@ -8,11 +8,7 @@ export APPLY_CHAT_TEMPLATE=${APPLY_CHAT_TEMPLATE:-false}
 export LM_EVAL_BACKEND=${LM_EVAL_BACKEND:-vllm}
 
 HF_ENTRIES=(
-    "Apertus-8B-Instruct-2509|swiss-ai/Apertus-8B-Instruct-2509|sft"
-    "Olmo-3-7B-Instruct|allenai/Olmo-3-7B-Instruct|step_300"
-    "Olmo-3-7B-Instruct|allenai/Olmo-3-7B-Instruct|step_350"
-    "Olmo-3-7B-Instruct|allenai/Olmo-3-7B-Instruct|step_400"
-    "Apertus-70B-Instruct-2509|swiss-ai/Apertus-70B-Instruct-2509|sft"
+    "SmolLM3-3B-checkpoints|HuggingFaceTB/SmolLM3-3B-checkpoints|stage3-step-4720000"
 )
 
 for ENTRY in "${HF_ENTRIES[@]}"; do

@@ -38,17 +38,17 @@ fi
 echo ""
 
 job_count=0
+HAS_MODEL_ITERATIONS=0
+if declare -p MODEL_ITERATIONS >/dev/null 2>&1; then
+    HAS_MODEL_ITERATIONS=1
+fi
 
 for MODEL in "${!MODEL_CHECKPOINTS[@]}"; do
     CKPT_PATH="${MODEL_CHECKPOINTS[$MODEL]}"
-    # Priority: model-specific iter encoded in the key ("<base>-iter<N>",
-    # used by SNR Megatron runners) > global CKPT_ITERATION override
-    # (--megatron-iter) > "latest". Parsing from the key replaces the old
-    # parallel MODEL_ITERATIONS associative array.
-    if [[ "$MODEL" =~ -iter([0-9]+)$ ]]; then
-        CKPT_ITER="${BASH_REMATCH[1]}"
-    else
-        CKPT_ITER="${CKPT_ITERATION:-latest}"
+    # Priority: model-specific override > global override > latest
+    CKPT_ITER="${CKPT_ITERATION:-latest}"
+    if (( HAS_MODEL_ITERATIONS )) && [[ -n "${MODEL_ITERATIONS["${MODEL}-iter"]+x}" ]]; then
+        CKPT_ITER="${MODEL_ITERATIONS["${MODEL}-iter"]}"
     fi
     job_count=$((job_count + 1))
 

@@ -106,23 +106,19 @@ bash scripts/launch_evaluations.sh snr-midtraining --script runners/snr_midtrain
 
 ### Smoke tests
 
-Four tiny end-to-end runs that exercise both backends and both
-single-checkpoint and multi-checkpoint paths. Each generates a temporary
-runner under `runners/snr_test_*.sh`, then launches it via the existing
-`single` mode with `--task` (one task name, or a comma-separated list) and
-`--limit 4` to cap samples per task. No SNR-specific flags or env-var
-overrides — `single` already covers the small-scope case.
+Tiny end-to-end runs that exercise both backends through the existing
+`single` mode. `--task` accepts one task name or a comma-separated list, and
+`--limit 4` caps samples per task. No SNR-specific flags needed.
 
-`models_test_hf.txt` and `models_test_megatron.txt` each contain one model;
-`--last 1` / `--last 2` controls how many of its checkpoints are evaluated.
+A pre-generated HF runner is committed at
+[runners/snr_test.sh](../../runners/snr_test.sh) (one SmolLM3-3B-checkpoints
+revision). For the multi-checkpoint and Megatron variants, generate a runner
+on the cluster first, then launch.
 
 ```bash
-# 1) 1 HF checkpoint, 1 task  (SmolLM3-3B-checkpoints, base model)
-bash scripts/generate_snr_runner.sh \
-    --models configs/signal_to_ratio/models_test_hf.txt --last 1 \
-    > runners/snr_test_hf_1.sh
+# 1) 1 HF checkpoint, 1 task — uses the committed runner
 bash scripts/launch_evaluations.sh single \
-    --script runners/snr_test_hf_1.sh --task hellaswag --limit 4
+    --script runners/snr_test.sh --task hellaswag --limit 4
 
 # 2) 2 HF checkpoints of the same model, 2 tasks
 bash scripts/generate_snr_runner.sh \
@@ -148,12 +144,12 @@ bash scripts/launch_evaluations.sh single \
 
 Notes:
 
-- `single --task` accepts a single task name or a comma-separated list;
-  `evaluate.sbatch` passes the value straight through to `lm_eval --tasks`.
+- `single --task` passes the value straight through to `lm_eval --tasks`,
+  so a comma-separated list works.
 - These runs go to the `single`-suffixed W&B project (e.g.
   `apertus-1.5-post-training-v0.0-single`) rather than `snr-experiments`
-  because they're pipeline checks, not real SNR data points. Sanity-check the
-  generated runner once with `bash -n runners/snr_test_hf_1.sh`.
+  because they're pipeline checks, not real SNR data points. Sanity-check a
+  generated runner once with `bash -n runners/snr_test_hf_2.sh`.
 
 ## Where outputs go
 
