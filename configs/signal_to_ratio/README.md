@@ -241,3 +241,43 @@ bash scripts/launch_evaluations.sh snr-pretraining \
     --model /iopsstor/.../apertus-175M-.../checkpoints \
     --megatron-iter 10000 --splits 2 --time 04:00:00
 ```
+
+### Rescue an eval that timed out mid-run
+
+[scripts/_run_per_task.sh](../../scripts/_run_per_task.sh) writes one
+sub-directory per finished task to
+`$EVAL_DIR/per_task/<task_name>/` *as each task completes* — they live on
+persistent storage, not scratch. If Slurm kills the job before the final
+merge + W&B upload, only the in-progress task is lost; everything already
+finished can be merged and pushed afterwards.
+
+Locate the eval directory (timestamp + jobid):
+
+```bash
+RUN=mariagrandury-epflnlp/snr-experiments
+NAME=apertus-350M-fwEdu60-fw240-seed1904-iter50000
+EVAL_DIR=$(ls -td /iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/eval_logs/$RUN/$NAME/harness/eval_*_<jobid> | head -1)
+ls "$EVAL_DIR/per_task/"     # surviving per-task dirs
+```
+
+Merge the surviving dirs and re-upload to W&B (one-shot, runs anywhere
+the repo is checked out — no Slurm needed):
+
+```bash
+cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train
+
+python -m scripts.alignment.merge_split_results \
+    --split_dirs "$EVAL_DIR"/per_task/*/ \
+    --output_dir "$EVAL_DIR"
+
+python -m scripts.alignment.update_wandb_alignment \
+    --entity mariagrandury-epflnlp \
+    --project snr-experiments \
+    --logs_root "$EVAL_DIR" \
+    --name "$NAME" \
+    --main_metrics "" --eval_duration 0
+```
+
+To finish the missing tasks too, re-launch the same checkpoint with
+`launch_evaluations.sh` and a `TASKS=...` override that lists only the
+missing ones (skip what's already in `$EVAL_DIR/per_task/`).
