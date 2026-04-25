@@ -27,6 +27,9 @@ SBATCH_EXTRA_ARGS=()
 if [[ -n "${SLURM_TIME:-}" ]]; then
     SBATCH_EXTRA_ARGS+=(--time "$SLURM_TIME")
 fi
+if [[ -n "${SLURM_PARTITION:-}" ]]; then
+    SBATCH_EXTRA_ARGS+=(--partition "$SLURM_PARTITION")
+fi
 
 # Launch evaluation jobs for each model
 echo "Launching evaluation jobs for ${#MODEL_CHECKPOINTS[@]} ${MODEL_TYPE_DESC}..."
