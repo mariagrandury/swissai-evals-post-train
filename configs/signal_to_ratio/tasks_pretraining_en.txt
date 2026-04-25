@@ -1,0 +1,10 @@
+ai2_arc
+belebele_eng_Latn
+mmlu
+global_mmlu_en
+piqa
+global_piqa_completions_eng_latn
+hellaswag
+mgsm_direct_en
+multiblimp_eng
+xnli_en
