@@ -6,22 +6,22 @@ Evaluation infrastructure for benchmarking Large Language Models on SLURM cluste
 
 ```bash
 # Evaluate a single model on the benchmark suite (with custom name)
-bash scripts/launch_evaluations.sh default --model meta-llama/Llama-3.1-8B-Instruct --name Llama-Baseline --time 04:00:00
+bash scripts/launch_evaluations.sh default --model meta-llama/Llama-3.1-8B-Instruct --name Llama-Baseline
 
 # Same, but split tasks across 4 parallel nodes for faster evaluation, name automatically infered
-bash scripts/launch_evaluations.sh default --model meta-llama/Llama-3.1-8B-Instruct --splits 4 --time 04:00:00
+bash scripts/launch_evaluations.sh default --model meta-llama/Llama-3.1-8B-Instruct --splits 4
 
 # Launch Megatron checkpoint without conversion (TODO: Verify), Megatron-iter defaults to: latest
-bash scripts/launch_evaluations.sh olmo-easy --model /capstor/store/../apertus-.../checkpoints/ --backend megatron_lm --name Megatron-Test-260216 --megatron-iter 4000000 --time 04:00:00
+bash scripts/launch_evaluations.sh olmo-easy --model /capstor/store/../apertus-.../checkpoints/ --backend megatron_lm --name Megatron-Test-260216 --megatron-iter 4000000
 
 # Launch with vllm backend - recommended!
-bash scripts/launch_evaluations.sh olmo-easy --model /capstor/store/../apertus-.../checkpoints/ --backend vllm --time 04:00:00
+bash scripts/launch_evaluations.sh olmo-easy --model /capstor/store/../apertus-.../checkpoints/ --backend vllm
 
 # Evaluate a base model with 5-shot and easy eval set (matching OLMo3 technical report settings)
-bash scripts/launch_evaluations.sh olmo-easy --model Qwen/Qwen2.5-7B --num-fewshot 5 --time 04:00:00
+bash scripts/launch_evaluations.sh olmo-easy --model Qwen/Qwen2.5-7B --num-fewshot 5
 
 # Evaluate a small model on a single task, useful for testing newly implemented tasks
-bash scripts/launch_evaluations.sh single --task multijail --model meta-llama/Llama-3.2-3B --backend vllm --time 00:15:00
+bash scripts/launch_evaluations.sh single --task multijail --model meta-llama/Llama-3.2-3B --backend vllm
 ```
 
 ## The Launch Script
@@ -76,22 +76,21 @@ bash scripts/launch_evaluations.sh <mode>
 | `--num-fewshot N` | Override num_fewshot globally. Tasks with explicit `num_fewshot: 0` in their YAML are never overridden. OLMo3 paper uses 5-shot for most MC tasks. |
 | `--backend <hf\|vllm>` | Inference backend (default: from sbatch script) |
 | `--splits K` | Split task list across K parallel SLURM nodes per model |
-| `--time HH:MM:SS` | Override the Slurm `--time` limit for eval jobs (default: from sbatch script). Aggregation jobs keep their own short default. |
 
 
 ### Examples
 
 ```bash
 # OLMo3 paper-faithful 5-shot evaluation
-bash scripts/launch_evaluations.sh olmo-complete --model allenai/OLMo-2-1124-7B --num-fewshot 5 --time 04:00:00
+bash scripts/launch_evaluations.sh olmo-complete --model allenai/OLMo-2-1124-7B --num-fewshot 5
 
 # Large model with vLLM and 8-way task splitting
 bash scripts/launch_evaluations.sh default \
-  --model Qwen/Qwen2.5-72B-Instruct --backend vllm --splits 8 --time 04:00:00
+  --model Qwen/Qwen2.5-72B-Instruct --backend vllm --splits 8
 
 # Run all models from a batch script on the safety suite
 bash scripts/launch_evaluations.sh olmo-safety \
-  --script runners/hf_eval_multiple_other_models.sh --splits 4 --time 04:00:00
+  --script runners/hf_eval_multiple_other_models.sh --splits 4
 ```
 
 #### Deprecated option:
@@ -215,7 +214,7 @@ Use `--num-fewshot 5` to match the OLMo3 paper settings. Tasks with hardcoded ex
 ```bash
 export TASKS=./configs/my_suite.txt
 export TABLE_METRICS=./configs/my_suite_main_table.txt
-bash scripts/launch_evaluations.sh olmo-complete --model my-model --time 04:00:00
+bash scripts/launch_evaluations.sh olmo-complete --model my-model
 ```
 
 Available task names can be found in `lm_eval_reference/tasks/` or by running `lm_eval --tasks list`.
