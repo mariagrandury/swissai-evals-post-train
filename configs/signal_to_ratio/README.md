@@ -98,6 +98,65 @@ Useful flags (all forwarded verbatim to the normal eval path — nothing SNR-spe
 - `--num-fewshot N` — override few-shot count.
 - `--time HH:MM:SS` — override the Slurm `--time` limit on eval jobs (the aggregation job keeps its own short default).
 
+### One command, idempotent across re-launches and collaborators
+
+Launching the full pretraining sweep (12 custom models × 10 canonical
+iters × ~85 tasks) is one command, and that **same command can be re-run
+any number of times** — by you, by a colleague, after a partial timeout —
+without redoing finished work:
+
+```bash
+bash scripts/launch_evaluations.sh snr-pretraining-full \
+    --script runners/snr_pretraining_all.sh --time 04:00:00
+```
+
+`snr-pretraining-full` uses [tasks_pretraining_full.txt](tasks_pretraining_full.txt)
+(the dedup union of `tasks_pretraining.txt` + `tasks_pretraining_b.txt`)
+and `runners/snr_pretraining_all.sh` enumerates the same 10 iters
+(2000, 6000, 12000, 18000, 22000, 28000, 34000, 38000, 44000, 50000)
+across every `apertus-{175M,350M,600M,1B}-fwEdu{30,60,90}` checkpoint.
+
+Two layers of idempotency keep re-launches and concurrent submissions
+from doing duplicate work:
+
+| Layer | Where | Behavior |
+| ----- | ----- | -------- |
+| Per-checkpoint | [`runners/hf_base_runner.sh`](../../runners/hf_base_runner.sh) | Before each `sbatch`, calls `scripts/_eval_status.py` and **skips submission entirely** if every task in `$TASKS` already has results on disk for that ckpt. |
+| Per-task | [`scripts/_run_per_task.sh`](../../scripts/_run_per_task.sh) | Inside a running job, filters `$TASKS` down to remaining and exits cleanly with no work if everything is already done. Logs skipped tasks to `skipped_tasks.log`. |
+
+A task counts as "done" if a non-empty `eval_*/per_task/<task>/` exists
+(saved by killed-mid-run jobs) or if some `eval_*/results_*.json` lists
+it under `.results` (saved by clean merged runs). Same logic in both
+the launcher gate and the runner gate, so they always agree.
+
+Race window: if two collaborators launch simultaneously, both see the
+same set of "missing" ckpts and may submit duplicate sbatch jobs for
+them. Once those jobs are running, the per-task layer kicks in — the
+second job's `_run_per_task.sh` will skip whatever the first one
+already produced. Stagger launches by a few minutes if you want to
+tighten this further.
+
+Sanity check before launching:
+
+```bash
+# Dashboard — per-ckpt progress bars + pending job IDs across all
+# models_pretraining_*.txt files.
+python3.11 scripts/snr_progress.py
+
+# Restrict to one models file
+python3.11 scripts/snr_progress.py --models configs/signal_to_ratio/models_pretraining_custom_all.txt
+
+# Find gaps not yet submitted
+python3.11 scripts/snr_progress.py --status not_submitted
+
+# Per-task detail for one ckpt
+python3.11 scripts/snr_progress.py --details \
+    --filter apertus-350M-fwEdu30-fw270-seed1904-iter2000
+```
+
+Note: the system `python` on login nodes is 3.6; the dashboard needs
+`python3.11`.
+
 ### Smoke tests
 
 Tiny end-to-end runs through the existing `single` mode (one or
