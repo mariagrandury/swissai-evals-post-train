@@ -23,14 +23,24 @@ mkdir -p "$PER_TASK_DIR"
 : > "$SKIPPED_LOG"
 
 # Filter out tasks that already have results in any prior eval_*/ run.
-# _eval_status.py prints REMAINING (one per line); empty output means
-# everything is already done and we exit 0 cleanly.
+# _eval_status.py contract: exit 0 + non-empty stdout = tasks remaining,
+# exit 1 = all done, exit 2+ = crash. Don't conflate the crash case with
+# "all done" — fall back to running everything if the filter misbehaves.
 REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+set +e
 REMAINING=$(python3 "$REPO_DIR/scripts/_eval_status.py" \
     --name "$NAME" --tasks "$TASKS" \
-    --entity "$WANDB_ENTITY" --project "$WANDB_PROJECT" || true)
+    --entity "$WANDB_ENTITY" --project "$WANDB_PROJECT" 2>/dev/null)
+EVAL_STATUS_RC=$?
+set -uo pipefail
 
-if [[ -z "$REMAINING" ]]; then
+if [[ $EVAL_STATUS_RC -eq 1 ]]; then
+    echo "All tasks for $NAME already have results — nothing to do."
+    exit 0
+elif [[ $EVAL_STATUS_RC -ne 0 ]]; then
+    echo "WARNING: _eval_status.py crashed (rc=$EVAL_STATUS_RC); running all tasks without filtering."
+    REMAINING=$(echo "$TASKS" | tr ',' '\n')
+elif [[ -z "$REMAINING" ]]; then
     echo "All tasks for $NAME already have results — nothing to do."
     exit 0
 fi

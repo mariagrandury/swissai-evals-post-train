@@ -54,12 +54,19 @@ def completed_tasks(name, entity, project, logs_root):
 
 def parse_tasks_input(tasks_arg):
     """tasks_arg is either a path to a file (one task per line, # comments) or a
-    comma-separated string."""
-    p = Path(tasks_arg)
-    if p.is_file():
+    comma-separated string. Comma-separated lists from the inner runner can
+    exceed Linux's NAME_MAX (255 bytes), so guard against the OSError that
+    Path.is_file() raises in that case (errno 36 / ENAMETOOLONG)."""
+    is_file = False
+    if "," not in tasks_arg and len(tasks_arg) < 4000:
+        try:
+            is_file = Path(tasks_arg).is_file()
+        except OSError:
+            is_file = False
+    if is_file:
         return [
             line.strip()
-            for line in p.read_text().splitlines()
+            for line in Path(tasks_arg).read_text().splitlines()
             if line.strip() and not line.strip().startswith("#")
         ]
     return [t.strip() for t in tasks_arg.split(",") if t.strip()]
