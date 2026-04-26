@@ -93,9 +93,6 @@ def create_model_evaluation_from_results(
     with open(result_file) as f:
         res = json.load(f)
 
-    # Extract timestamp from results filename: results_2025-07-26T00-35-42.178646.json
-    timestamp = result_file.stem.replace("results_", "")
-
     for task_name, metrics in res["results"].items():
         # Create Metric objects for this task
         task_metrics = []
@@ -121,9 +118,12 @@ def create_model_evaluation_from_results(
                 # If only one metric with this name, use it directly
                 task_metrics.append(metric_list[0])
 
-        # Load ALL samples, then select a stratified subset
+        # Load ALL samples, then select a stratified subset.
+        # Per-task lm_eval invocations each stamp their samples file with their
+        # own datetime.now(), so we can't pin the timestamp to the merged
+        # results file's — match any timestamp instead.
         all_samples = []
-        for sample_file in eval_dir.glob(f"**/samples_{task_name}_{timestamp}.jsonl"):
+        for sample_file in eval_dir.glob(f"**/samples_{task_name}_*.jsonl"):
             with open(sample_file, 'r') as f:
                 for line in f:
                     line = line.strip()
