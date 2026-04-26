@@ -114,7 +114,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- Validate mode ---
-VALID_MODES=("default" "multi-lingual" "apertus-previous" "pretrain" "olmo-easy" "olmo-main" "olmo-heldout" "olmo-safety" "olmo-longcontext" "olmo-complete" "eval-debug" "non-gated" "single" "snr-pretraining" "snr-midtraining" "snr-posttraining")
+VALID_MODES=("default" "multi-lingual" "apertus-previous" "pretrain" "olmo-easy" "olmo-main" "olmo-heldout" "olmo-safety" "olmo-longcontext" "olmo-complete" "eval-debug" "non-gated" "single" "snr-pretraining" "snr-pretraining-full" "snr-midtraining" "snr-posttraining")
 if [[ ! " ${VALID_MODES[*]} " =~ " ${EVAL_MODE} " ]]; then
     echo "Error: Invalid mode '$EVAL_MODE'"
     echo "Valid modes: ${VALID_MODES[*]}"
@@ -222,6 +222,13 @@ case "$EVAL_MODE" in
         ;;
     "snr-pretraining")
         export TASKS=./configs/signal_to_ratio/tasks_pretraining.txt
+        ;;
+    "snr-pretraining-full")
+        # Union of tasks_pretraining.txt and tasks_pretraining_b.txt — the
+        # full SNR pretraining task list. Combined with the idempotency
+        # checks in hf_base_runner.sh + _run_per_task.sh, this is the mode
+        # to use when launching "everything missing" against a model set.
+        export TASKS=./configs/signal_to_ratio/tasks_pretraining_full.txt
         ;;
     "snr-midtraining")
         export TASKS=./configs/signal_to_ratio/tasks_midtraining.txt

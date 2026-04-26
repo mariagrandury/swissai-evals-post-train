@@ -60,6 +60,19 @@ for MODEL in "${!MODEL_CHECKPOINTS[@]}"; do
     echo "  Checkpoint path: $CKPT_PATH"
     echo "  Checkpoint iter: $CKPT_ITER (only applies to local Megatron checkpoints)"
 
+    # Idempotency: skip the whole sbatch if every task in $TASKS already
+    # has results on disk for this checkpoint. Lets the same launch
+    # command be re-run (or run by a colleague) without redoing work.
+    # Only applies when TASKS is set (the launcher always sets it).
+    if [[ -n "${TASKS:-}" ]]; then
+        if ! python3 scripts/_eval_status.py \
+                --name "$MODEL" --tasks "$TASKS" \
+                --entity "$WANDB_ENTITY" --project "$WANDB_PROJECT" >/dev/null 2>&1; then
+            echo "  SKIP: all tasks already have results for $MODEL"
+            continue
+        fi
+    fi
+
     if (( NUM_SPLITS <= 1 )); then
         # Single-node execution (original behavior)
         sbatch --job-name eval-$MODEL \

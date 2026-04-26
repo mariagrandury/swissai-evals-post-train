@@ -345,7 +345,7 @@ elif [[ $LM_EVAL_BACKEND == "megatron_lm" ]]; then
     CMD_BASE="torchrun --nproc-per-node=4 -m lm_eval --model megatron_lm --model_args=$COMMON_MODEL_ARGS ${COMMON_EVAL_ARGS[@]}"
 fi
 # scripts/_run_per_task.sh reads CMD_BASE/TASKS/HARNESS_EVAL_DIR from env.
-export CMD_BASE TASKS HARNESS_EVAL_DIR
+export CMD_BASE TASKS HARNESS_EVAL_DIR NAME WANDB_ENTITY WANDB_PROJECT LOGS_ROOT
 
 echo "Installation command: $INSTALL_CMD"
 echo "Per-task command base: $CMD_BASE"
