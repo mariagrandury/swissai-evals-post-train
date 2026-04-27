@@ -1,7 +1,7 @@
 #!/bin/bash
-# Continuously submit Olmo-3-1025-7B stage1-step1413814 evals to the debug
-# partition until every task in tasks_pretraining_full.txt has results.
-# Each cycle:
+# Continuously submit apertus-350M-fwEdu30-fw270-seed1904-iter50000 evals to
+# the debug partition until every task in tasks_pretraining_full.txt has
+# results. Each cycle:
 #   1. Discover already-completed tasks by scanning prior eval_*/ dirs
 #      (both per_task/ subdirs from killed runs AND results_*.json from
 #      runs that finished cleanly).
@@ -12,13 +12,14 @@
 # unfinished — those are likely permanently broken (e.g. unimplemented
 # in the harness) and re-running won't help.
 #
-# Run with: nohup bash scripts/_olmo_eval_loop.sh > logs/olmo_eval_loop.log 2>&1 &
+# Run with: nohup bash scripts/debug_loop.sh > logs/debug_loop.log 2>&1 &
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-NAME=Olmo-3-1025-7B-stage1-step1413814
-MODEL=allenai/Olmo-3-1025-7B
-REVISION=stage1-step1413814
+NAME=apertus-1B-fwEdu30-fw270-seed1904-iter50000
+MODEL_DIR=apertus-1B-fwEdu30-fw270-seed1904
+CKPT_PATH=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/Meg-Runs/data-mix-small/$MODEL_DIR/checkpoints
+CKPT_ITER=50000
 FULL_TASKS=./configs/signal_to_ratio/tasks_pretraining_full.txt
 LOGS_BASE=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/eval_logs/mariagrandury-epflnlp/snr-experiments/$NAME/harness
 
@@ -27,12 +28,14 @@ TOTAL=$(echo "$ALL_TASKS" | wc -l)
 PREV_HASH=""
 
 while true; do
-    # If a job with this NAME is already in the queue (running or pending),
-    # wait for it before doing anything else — it will produce results we
-    # need to read before deciding what to submit next.
-    EXISTING=$(squeue --me --noheader -o "%i %j" | awk -v n="eval-$NAME" '$2==n {print $1}')
+    # If a debug-partition job for this NAME is already in the queue (the
+    # loop's own previous submission), wait for it — its results inform the
+    # next submission's TASKS env. Jobs in OTHER partitions are independent
+    # attempts on the same ckpt and shouldn't block the loop; per-task
+    # idempotency dedups any overlap when each job starts.
+    EXISTING=$(squeue --me --noheader -o "%i %j %P" | awk -v n="eval-$NAME" '$2==n && $3=="debug" {print $1}')
     if [[ -n "$EXISTING" ]]; then
-        echo "[$(date '+%F %T')] Existing job(s) for $NAME: $EXISTING — waiting"
+        echo "[$(date '+%F %T')] Existing debug job(s) for $NAME: $EXISTING — waiting"
         for J in $EXISTING; do
             while squeue -j "$J" --noheader -o "%i" 2>/dev/null | grep -q "$J"; do
                 sleep 60
@@ -77,14 +80,16 @@ while true; do
 
     TASKS_ARG=$(echo "$REMAINING" | paste -sd, -)
     JOB_ID=$(TASKS="$TASKS_ARG" \
-             LM_EVAL_BACKEND=vllm \
+             LM_EVAL_BACKEND=megatron_lm \
+             TOKENIZER=alehc/swissai-tokenizer \
+             BOS=true \
              APPLY_CHAT_TEMPLATE=false \
              WANDB_ENTITY=mariagrandury-epflnlp \
              WANDB_PROJECT=snr-experiments \
-             REVISION=$REVISION \
              sbatch --parsable --partition=debug --time=01:30:00 \
                  --job-name="eval-$NAME" \
-                 scripts/evaluate.sbatch "$MODEL" "$NAME") || {
+                 --export=ALL,CKPT_ITER=$CKPT_ITER \
+                 scripts/evaluate.sbatch "$CKPT_PATH" "$NAME") || {
         echo "[$(date '+%F %T')] sbatch failed; sleeping 60s before retry"; sleep 60; continue
     }
     echo "[$(date '+%F %T')] Submitted $JOB_ID with $REM_COUNT tasks"

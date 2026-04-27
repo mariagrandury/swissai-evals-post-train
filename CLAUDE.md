@@ -76,10 +76,16 @@ layer just reschedules them next time.
 | swiss-ai/Apertus-8B-2509 | main |
 | allenai/Olmo-3-1025-7B | stage2-step47684-mix-round5-from-2T-ckpt, stage3-step11921 |
 
-`Olmo-3-1025-7B-stage1-step1413814` is **separately handled** by
-[`scripts/_olmo_eval_loop.sh`](scripts/_olmo_eval_loop.sh) which keeps
-resubmitting 1:30 debug-partition jobs until every task in the full list has
-results. Don't add stage1 to the top runner — you'd duplicate work.
+[`scripts/debug_loop.sh`](scripts/debug_loop.sh) is a single-ckpt
+debug-partition loop: it keeps resubmitting 1:30 jobs (narrowing each
+submission's `TASKS` env to the still-missing set) until every task in
+`tasks_pretraining_full.txt` has results, or until two consecutive cycles
+make zero progress. Edit the `NAME`/`CKPT_PATH`/`CKPT_ITER` (or the
+HF `MODEL`/`REVISION`, switching `LM_EVAL_BACKEND` back to `vllm`) at the
+top of the script to retarget. It currently points at
+`apertus-350M-fwEdu30-fw270-seed1904-iter50000`. If you also have it
+covering a ckpt that's in one of the top runners, you'll duplicate work —
+prune one or the other.
 
 [`runners/snr_pretraining_hf_70b.sh`](runners/snr_pretraining_hf_70b.sh) — 1 job:
 
@@ -183,7 +189,7 @@ export HF_TOKEN=<your_hf_token> WANDB_API_KEY=<your_wandb_key> && cd /iopsstor/s
   scheduling lever. Recent heavy usage (mariagrandury > 3× their share) drops
   priority; expect long pending times.
 - **Partition `debug`:** 1:30 max wall, 12-ish idle nodes, but
-  **`debug-qos` allows max 1 running + 1 queued per user**. The Olmo loop
+  **`debug-qos` allows max 1 running + 1 queued per user**. `debug_loop.sh`
   exploits exactly that: it submits, blocks, submits the next.
 - **`#SBATCH --gpus-per-node=4` is hardcoded** in `evaluate.sbatch`. The 4-GPU
   node is what the eval container expects.
@@ -256,7 +262,7 @@ INNER_EXPORTS="export NAME='$NAME' WANDB_ENTITY='$WANDB_ENTITY' WANDB_PROJECT='$
 If you add a new variable that the runner needs, add it here too.
 
 ### 6. `Path("comma,list").is_file()` raises ENAMETOOLONG
-The Olmo loop builds the next job's `TASKS` env from the remaining-task set —
+`debug_loop.sh` builds the next job's `TASKS` env from the remaining-task set —
 68+ task names ≈ 1500 chars. `_eval_status.py:parse_tasks_input` was probing
 `Path(tasks_arg).is_file()`, which calls `os.stat()`, which on Linux with
 `NAME_MAX=255` raises `OSError(36)` for any string that long. Fix: short-
@@ -272,6 +278,29 @@ upload step unconditionally** and died with `Expected exactly one results
 file, found 0`, ending in Slurm state `FAILED`. Fix: capture the rc; rc=1
 means "all done", rc≥2 means crash → fall through and run all tasks
 unfiltered. **Never silently equate "filter failure" with "nothing to do".**
+
+### 8. Olmo `stage2-step47684-mix-round5-from-2T-ckpt` revision: unrecognised architecture
+The Olmo-3-1025-7B repo's stage2 mid-round revision uses model_type
+`olmo2-retrofit`, which is not in transformers 5.1.0's model registry. vLLM
+fails inside `ModelConfig.__init__` with:
+
+```
+pydantic_core._pydantic_core.ValidationError: 1 validation error for ModelConfig
+  Value error, The checkpoint you are trying to load has model type
+  `olmo2-retrofit` but Transformers does not recognize this architecture.
+```
+
+This is **not** caught usefully by the per-task fault tolerance — every
+task fails identically (rc=1) for ~12 h until Slurm wall, then the W&B upload
+step finds 0 results and the job ends FAILED. Symptom: 86 / 86
+`=== FAILED (rc=1)` markers in the log with the same `ValidationError` block
+before each. First observed on job 1947613.
+
+Workarounds: skip that revision, install `transformers` from a branch that
+ships the `olmo2-retrofit` mapping, or pin the eval container's transformers
+to a version that supports it. The non-mid-round Olmo revisions
+(`stage1-step1413814`, `stage3-step11921`) and the `main` revision load fine
+— the issue is specific to the `mix-round5-from-2T-ckpt` retrofit checkpoints.
 
 ---
 
@@ -324,9 +353,9 @@ python -m scripts.alignment.update_wandb_alignment \
     --logs_root "$EVAL_DIR" --name "$NAME" --main_metrics "" --eval_duration 0
 ```
 
-Same procedure for the Olmo loop (it produces multiple `eval_*` dirs over its
-lifetime — each is a partial run; the next launch's idempotency check sees
-their per-task subdirs as "done").
+Same procedure for `debug_loop.sh` (it produces multiple `eval_*` dirs over
+its lifetime — each is a partial run; the next launch's idempotency check
+sees their per-task subdirs as "done").
 
 ---
 
