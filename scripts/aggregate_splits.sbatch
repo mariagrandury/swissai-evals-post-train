@@ -92,8 +92,8 @@ done
 # The real value could be parsed from logs, but the wall-clock time is most relevant
 DURATION=${EVAL_DURATION:-0}
 
-echo "Uploading merged results to wandb"
-WANDB_CMD="cd $PWD && python -m scripts.alignment.update_wandb_alignment --entity $WANDB_ENTITY --project $WANDB_PROJECT --logs_root $MERGED_DIR --name $NAME --main_metrics $TABLE_METRICS --eval_duration $DURATION"
+echo "Uploading merged results to wandb (per-model curve, one step per ckpt)"
+WANDB_CMD="cd $PWD && python scripts/push_all_results.py --entity $WANDB_ENTITY --project $WANDB_PROJECT --name $NAME --eval-duration $DURATION"
 echo "Running: $WANDB_CMD"
 srun -ul --mpi=pmix --environment=./containers/env.toml bash -c " \
     $WANDB_CMD

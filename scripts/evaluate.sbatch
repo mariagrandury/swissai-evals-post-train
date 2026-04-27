@@ -425,8 +425,8 @@ if (( NUM_SPLITS > 1 )); then
     echo "Results in: $HARNESS_EVAL_DIR"
     echo "Marker written to: $SPLIT_MARKER_DIR/split_${SPLIT_INDEX}.txt"
 else
-    echo "Uploading results to wandb"
-    WANDB_CMD="cd $PWD && python -m scripts.alignment.update_wandb_alignment --entity $WANDB_ENTITY --project $WANDB_PROJECT --logs_root $HARNESS_EVAL_DIR --name $NAME --main_metrics $TABLE_METRICS --eval_duration $DURATION"
+    echo "Uploading results to wandb (per-model curve, one step per ckpt)"
+    WANDB_CMD="cd $PWD && python scripts/push_all_results.py --entity $WANDB_ENTITY --project $WANDB_PROJECT --name $NAME --eval-duration $DURATION"
     echo "Running command to upload results to wandb:"
     echo "$WANDB_CMD"
     srun -ul --mpi=pmix --environment=./containers/env.toml bash -c " \
