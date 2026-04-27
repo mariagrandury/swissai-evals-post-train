@@ -54,13 +54,6 @@ arc_hi
 arc_ru
 arc_vi
 arc_zh
-mgsm_direct_en
-mgsm_direct_es
-mgsm_direct_eu
-mgsm_direct_ja
-mgsm_direct_ru
-mgsm_direct_sw
-mgsm_direct_zh
 multiblimp_eng
 multiblimp_spa
 multiblimp_rus

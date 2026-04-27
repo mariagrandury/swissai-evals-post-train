@@ -11,6 +11,14 @@ xwinograd_jp
 xwinograd_ru
 xwinograd_zh
 
+mgsm_direct_en
+mgsm_direct_es
+mgsm_direct_eu
+mgsm_direct_ja
+mgsm_direct_ru
+mgsm_direct_sw
+mgsm_direct_zh
+
 arc_vi
 belebele_vie_Latn
 global_mmlu_vi
