@@ -75,57 +75,122 @@ def derive_base_name(spec: str) -> str:
     return os.path.basename(m)
 
 
-def list_megatron_iters(ckpt_dir: str, total: int | None, last: int | None) -> list[int]:
+def _list_cmd(spec: str, total: int | None, last: int | None,
+              dense_tail: int | None, tail_pct: int | None) -> list[str]:
+    cmd = [str(REPO / "scripts" / "list_checkpoints.sh"), spec]
+    cmd += ["--total", str(total)] if total else ["--last", str(last)]
+    if dense_tail:
+        cmd += ["--dense-tail", str(dense_tail)]
+    if tail_pct:
+        cmd += ["--tail-pct", str(tail_pct)]
+    return cmd
+
+
+def list_megatron_iters(ckpt_dir: str, total: int | None, last: int | None,
+                        dense_tail: int | None = None,
+                        tail_pct: int | None = None) -> list[int]:
     """Run scripts/list_checkpoints.sh to get the same enumeration the generator uses."""
-    cmd = [str(REPO / "scripts" / "list_checkpoints.sh"), ckpt_dir]
-    cmd += [f"--total", str(total)] if total else [f"--last", str(last)]
     try:
-        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True)
+        out = subprocess.check_output(
+            _list_cmd(ckpt_dir, total, last, dense_tail, tail_pct),
+            stderr=subprocess.DEVNULL, text=True,
+        )
     except subprocess.CalledProcessError:
         return []
     return [int(x) for x in out.split() if x.strip().isdigit()]
 
 
-def list_hf_branches(repo_url: str, total: int | None, last: int | None) -> list[str]:
+def list_hf_branches(repo_url: str, total: int | None, last: int | None,
+                     dense_tail: int | None = None,
+                     tail_pct: int | None = None) -> list[str]:
     """Same logic for HF repos via list_checkpoints.sh."""
-    cmd = [str(REPO / "scripts" / "list_checkpoints.sh"), repo_url]
-    cmd += [f"--total", str(total)] if total else [f"--last", str(last)]
     try:
-        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True)
+        out = subprocess.check_output(
+            _list_cmd(repo_url, total, last, dense_tail, tail_pct),
+            stderr=subprocess.DEVNULL, text=True,
+        )
     except subprocess.CalledProcessError:
         return []
     return [b for b in out.splitlines() if b.strip()]
 
 
-def enumerate_targets_from_models_file(models_file: Path) -> list[Target]:
-    """Return one Target per (model, ckpt) selected per the size-based rule."""
-    targets: list[Target] = []
+def enumerate_targets_from_models_file(
+    models_file: Path,
+    dense_tail: int | None = 5,
+    tail_pct: int | None = 10,
+) -> list[Target]:
+    """Return one Target per (model, ckpt) selected per the size-based rule.
+
+    For <3B models we pick 10 evenly spaced ckpts plus up to ``dense_tail`` more
+    from the last ``tail_pct`` percent of training. To keep the curve points
+    comparable across runs of different lengths (some models in the file are
+    still mid-resume and don't have iter 50000 on disk yet), we derive the
+    canonical iter set from the longest fully-trained reference model in the
+    same file and apply it to ALL small-size Megatron models. Half-trained
+    models will list iters they don't have on disk yet — those show up as
+    ``not_submitted`` until the resume training fills them in.
+
+    For >=3B we just take the last 1 ckpt (sufficient for HF reference models).
+    """
+    # First pass: classify entries and collect on-disk iters for small Megatron.
+    entries: list[tuple[str, str, str]] = []  # (kind, spec, base)
+    small_meg_iters: dict[str, list[int]] = {}  # base -> on-disk iters
     for line in models_file.read_text().splitlines():
         spec = line.strip()
         if not spec or spec.startswith("#"):
             continue
         base = derive_base_name(spec)
         size_b = parse_size_b(base)
-        # Selection: 10 ckpts if <3B, else last 1
-        if size_b is None or size_b < SMALL_MODEL_THRESHOLD_B:
-            total, last = 10, None
-        else:
-            total, last = None, 1
-
+        small = size_b is None or size_b < SMALL_MODEL_THRESHOLD_B
         if spec.startswith(("/iopsstor", "/capstor")):
-            iters = list_megatron_iters(spec, total, last)
+            kind = "meg_small" if small else "meg_large"
+            entries.append((kind, spec, base))
+            if small:
+                small_meg_iters[base] = list_megatron_iters(
+                    spec, 10, None, dense_tail, tail_pct
+                )
+        elif spec.startswith("https://huggingface.co/"):
+            entries.append(("hf_small" if small else "hf_large", spec, base))
+        else:
+            print(f"# WARNING: unrecognized format: {spec}", file=sys.stderr)
+
+    # Canonical iter set = the longest list among small Megatron models. Ties
+    # broken by max iter so a fully-trained model wins over a half-trained one
+    # of the same length.
+    canonical_iters: list[int] | None = None
+    if small_meg_iters:
+        canonical_iters = max(
+            small_meg_iters.values(),
+            key=lambda its: (len(its), max(its) if its else 0),
+        )
+
+    # Second pass: emit Targets.
+    targets: list[Target] = []
+    for kind, spec, base in entries:
+        if kind == "meg_small":
+            iters = canonical_iters or small_meg_iters.get(base, [])
             for it in iters:
                 targets.append(
                     Target(model_name=base, ckpt_id=f"iter{it}", name=f"{base}-iter{it}")
                 )
-        elif spec.startswith("https://huggingface.co/"):
-            branches = list_hf_branches(spec, total, last)
+        elif kind == "meg_large":
+            iters = list_megatron_iters(spec, None, 1)
+            for it in iters:
+                targets.append(
+                    Target(model_name=base, ckpt_id=f"iter{it}", name=f"{base}-iter{it}")
+                )
+        elif kind == "hf_small":
+            branches = list_hf_branches(spec, 10, None, dense_tail, tail_pct)
             for br in branches:
                 targets.append(
                     Target(model_name=base, ckpt_id=br, name=f"{base}-{br}")
                 )
-        else:
-            print(f"# WARNING: unrecognized format: {spec}", file=sys.stderr)
+        elif kind == "hf_large":
+            branches = list_hf_branches(spec, None, 1)
+            for br in branches:
+                targets.append(
+                    Target(model_name=base, ckpt_id=br, name=f"{base}-{br}")
+                )
     return targets
 
 

@@ -1,28 +1,87 @@
 #!/bin/bash
-# Enumerate Megatron iters (multiples of 2000) or HF non-main branches for one model.
-# Usage: list_checkpoints.sh <model> [--include SUBSTR] (--last N | --total T)
+# Enumerate Megatron iters (multiples of 2000) or HF non-main branches for one
+# model.
+#
+# Usage:
+#   list_checkpoints.sh <model> [--include SUBSTR] (--last N | --total T) \
+#                       [--dense-tail D] [--tail-pct P]
+#
+# --total T:        T checkpoints evenly spaced over the full training run.
+# --last N:         the last N checkpoints (no spacing).
+# --dense-tail D:   ALSO include up to D checkpoints evenly spaced within the
+#                   last P% of training (default P=10). Combined with --total
+#                   T, the union is emitted in training order without dupes.
+#                   Use this to keep a single low-resolution full-run curve
+#                   while getting a denser late-training picture for SNR work.
+# --tail-pct P:     percentage of the training span counted as "tail" (default
+#                   10). Ignored unless --dense-tail is set.
 set -euo pipefail
 
 MODEL="${1:-}"; shift || true
 INCLUDE=""
 if [[ "${1:-}" == "--include" ]]; then INCLUDE="$2"; shift 2; fi
-[[ -n "$MODEL" && $# -eq 2 && "$1" =~ ^--(last|total)$ && "$2" =~ ^[1-9][0-9]*$ ]] \
-    || { echo "Usage: $0 <model> [--include SUBSTR] (--last N | --total T)" >&2; exit 1; }
-MODE="${1#--}"; COUNT="$2"
+
+MODE=""; COUNT=""; DENSE=0; TAIL_PCT=10
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --last|--total)
+            MODE="${1#--}"; COUNT="$2"; shift 2 ;;
+        --dense-tail)
+            DENSE="$2"; shift 2 ;;
+        --tail-pct)
+            TAIL_PCT="$2"; shift 2 ;;
+        *)
+            echo "Usage: $0 <model> [--include SUBSTR] (--last N | --total T) [--dense-tail D] [--tail-pct P]" >&2; exit 1 ;;
+    esac
+done
+
+[[ -n "$MODEL" && -n "$MODE" && "$COUNT" =~ ^[1-9][0-9]*$ ]] \
+    || { echo "Usage: $0 <model> [--include SUBSTR] (--last N | --total T) [--dense-tail D] [--tail-pct P]" >&2; exit 1; }
+[[ "$DENSE" =~ ^[0-9]+$ ]] \
+    || { echo "Error: --dense-tail must be a non-negative integer (got '$DENSE')" >&2; exit 1; }
+[[ "$TAIL_PCT" =~ ^[1-9][0-9]?$|^100$ ]] \
+    || { echo "Error: --tail-pct must be 1-100 (got '$TAIL_PCT')" >&2; exit 1; }
 
 filter_include() { [[ -z "$INCLUDE" ]] && cat || grep -F -- "$INCLUDE"; }
 
-# From stdin, print last COUNT lines (mode=last) or COUNT evenly-spaced (mode=total).
+# Pick checkpoints from stdin: --total T evenly spaced, or --last N. Then
+# optionally union with D evenly-spaced picks from the last P% of input.
+# Output is in original (training) order, deduplicated.
 select_lines() {
-    awk -v m="$MODE" -v c="$COUNT" '
-        {a[NR]=$0}
+    awk -v m="$MODE" -v c="$COUNT" -v d="$DENSE" -v p="$TAIL_PCT" '
+        { a[NR] = $0 }
         END {
-            n=NR
-            if (n==0) { print "no candidates to select from" > "/dev/stderr"; exit 2 }
-            if (m=="last") for (i=(n>c?n-c+1:1); i<=n; i++) print a[i]
-            else if (c>=n) for (i=1; i<=n; i++) print a[i]
-            else if (c==1) print a[n]
-            else for (i=0; i<c; i++) print a[int(i*(n-1)/(c-1))+1]
+            n = NR
+            if (n == 0) { print "no candidates to select from" > "/dev/stderr"; exit 2 }
+
+            # primary selection
+            if (m == "last") {
+                start = (n > c ? n - c + 1 : 1)
+                for (i = start; i <= n; i++) sel[i] = 1
+            } else if (c >= n) {
+                for (i = 1; i <= n; i++) sel[i] = 1
+            } else if (c == 1) {
+                sel[n] = 1
+            } else {
+                for (i = 0; i < c; i++) sel[int(i * (n - 1) / (c - 1)) + 1] = 1
+            }
+
+            # dense tail (optional union with primary selection)
+            if (d > 0) {
+                tail_n = int(n * p / 100)
+                if (tail_n < d) tail_n = d
+                if (tail_n > n) tail_n = n
+                tail_start = n - tail_n + 1
+                if (d >= tail_n) {
+                    for (i = tail_start; i <= n; i++) sel[i] = 1
+                } else if (d == 1) {
+                    sel[n] = 1
+                } else {
+                    for (i = 0; i < d; i++) sel[tail_start + int(i * (tail_n - 1) / (d - 1))] = 1
+                }
+            }
+
+            for (i = 1; i <= n; i++) if (i in sel) print a[i]
         }'
 }
 

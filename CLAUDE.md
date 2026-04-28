@@ -46,27 +46,41 @@ sacct -u $USER -S <since-date> -X -o "JobID,JobName%50,State,Elapsed"
 apertus-{175M,350M,600M,1B}-fwEdu{30,60,90}-fw{270,240,210}-seed1904
 ```
 
-**Canonical iter set** (matches what fully-trained 350M/600M/1B-fwEdu30/60 saved):
+**Canonical iter set** (10 evenly spaced over the full run + up to 5 dense
+picks from the last 10% of training, deduplicated):
 
 ```
-2000, 6000, 12000, 18000, 22000, 28000, 34000, 38000, 44000, 50000
+2000, 6000, 12000, 18000, 22000, 28000, 34000, 38000, 42000, 44000, 46000, 48000, 50000
 ```
+
+The dense tail is what makes the late-training plateau readable — without it
+we'd have to rely on the gap between iter 44000 and 50000 alone.
+[`scripts/list_checkpoints.sh`](scripts/list_checkpoints.sh) generates this via
+`--total 10 --dense-tail 5` (`--tail-pct` defaults to 10%).
+[`scripts/generate_snr_runner.sh`](scripts/generate_snr_runner.sh) forwards both
+flags. [`scripts/snr_progress.py`](scripts/snr_progress.py) anchors all small
+Megatron models in a given models file to the LONGEST per-model iter list (so
+fully-trained and half-trained models share the same x-axis grid in W&B —
+half-trained ones list iters they don't have on disk yet, marked
+`not_submitted` until resume training catches up).
 
 The runner [`runners/snr_pretraining_all.sh`](runners/snr_pretraining_all.sh) is the
-single-source-of-truth combo: 12 models × 10 iters = 120 cells.
+single-source-of-truth combo: 12 models × 13 iters = 156 cells.
 
 **Half-trained models (don't yet have all canonical iters on disk):**
 
 | Model | Last iter saved | Missing from canonical set |
 |---|---:|---|
 | 175M-fwEdu30/60/90 (×3) | 49180/48351/48948 | only 50000 |
-| 600M-fwEdu90 | 26000 | 28000, 34000, 38000, 44000, 50000 |
-| 1B-fwEdu90 | 14000 | 18000, 22000, 28000, 34000, 38000, 44000, 50000 |
+| 600M-fwEdu90 | 26000 | 28000, 34000, 38000, 42000, 44000, 46000, 48000, 50000 |
+| 1B-fwEdu90 | 14000 | 18000, 22000, 28000, 34000, 38000, 42000, 44000, 46000, 48000, 50000 |
 
 Resume training jobs (1947226–1947230) will fill these in. Until they do,
 eval jobs targeting the missing iters will fail at Megatron's
-`--exit-on-missing-checkpoint`. That's expected — the per-task idempotency
-layer just reschedules them next time.
+`--exit-on-missing-checkpoint`. That's expected —
+[`scripts/launch_ckpts_in_progress.sh`](scripts/launch_ckpts_in_progress.sh)
+short-circuits before submitting (skips with "iter dir missing"), and the
+per-task idempotency layer reschedules them next launch once the iter exists.
 
 ### Reference HF models (4 models, two runners)
 
@@ -145,6 +159,18 @@ task is "done" iff a non-empty `eval_*/per_task/<task>/` exists (killed runs)
 "missing" set and may submit duplicate sbatch jobs for the same ckpt. The per-
 task layer dedups inside the second job — no compute waste, just queue churn.
 Stagger by a few minutes when you can.
+
+**Filling gaps with right-sized walltime.** After the canonical-runner sweep
+TIMEOUTs leave a long tail of "1–10 tasks remaining" ckpts, re-running the
+runner queues fresh 12h jobs for each — wasteful, and the queue priority
+suffers. [`scripts/launch_ckpts_in_progress.sh`](scripts/launch_ckpts_in_progress.sh)
+is the targeted alternative: it reads `snr_progress.py`, finds every ckpt
+that is `[in_progress]` with no active job (stuck) or `[not_submitted]`
+(never run), and submits one sbatch per ckpt with walltime sized to the
+*remaining* work — `max(30 min, remaining * per_task + cold_start + buffer)`,
+with `--time 11:59:00` reserved for fresh ckpts that have no progress yet.
+Per-task minute estimates live at the top of the script; adjust if the task
+mix shifts again.
 
 ---
 

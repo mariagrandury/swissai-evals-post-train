@@ -1,11 +1,14 @@
 #!/bin/bash
-# Resubmit one sbatch per "stuck" ckpt: ones marked [in_progress] in
-# snr_progress.py with NO active job (partial results from a past run that
-# timed out or was cancelled). Walltime is sized to the REMAINING work, not
-# the model size, so a ckpt with 1 task left gets ~30 min and one with 30
-# tasks left gets several hours.
+# Submit one sbatch per ckpt that needs work — both [in_progress] (partial
+# results, no active job) and [not_submitted] (no results, no job) entries
+# from snr_progress.py. Already-running ckpts are skipped (they have a
+# `jobs=` annotation in the dashboard).
 #
-# Usage: bash scripts/relaunch_stuck.sh [--dry-run]
+# Walltime sizing:
+#   * partial-progress ckpts: max(30 min, remaining * per_task + cold_start + buffer)
+#   * no-progress ckpts:      12h (full normal-partition cap, default for new ckpts)
+#
+# Usage: bash scripts/launch_ckpts_in_progress.sh [--dry-run]
 #
 # Per-task minute estimates (logprob-only, since mgsm is no longer in the
 # task list) are coarse averages from observed runs. Adjust if the typical
@@ -21,27 +24,38 @@ COLD_START_MIN=15      # checkpoint load + container setup
 BUFFER_MIN=10
 MIN_WALL_MIN=30
 CAP_MIN=719            # 11:59:00 — max for normal partition with 1 min margin
+DEFAULT_NEW_WALL="11:59:00"   # for ckpts with no progress yet
 
 CKPT_BASE=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/Meg-Runs/data-mix-small
 
-# Stuck = [in_progress] with NO `jobs=` annotation in snr_progress output.
-STUCK=$(python3.11 scripts/snr_progress.py 2>&1 | awk '
+# Pick from snr_progress.py:
+#   * [in_progress] with NO `jobs=` annotation (stuck) — sized walltime
+#   * [not_submitted]                                 — 12h walltime
+TARGETS=$(python3.11 scripts/snr_progress.py 2>&1 | awk '
     /\[in_progress\]/ && !/jobs=/ {
+        status = "in_progress"
+    }
+    /\[not_submitted\]/ {
+        status = "not_submitted"
+    }
+    /\[in_progress\]/ || /\[not_submitted\]/ {
+        if (/\[in_progress\]/ && /jobs=/) next
         match($0, /([0-9]+)\/([0-9]+)/, m)
         done = m[1]; total = m[2]
-        for (i=1; i<=NF; i++) if ($i ~ /apertus|SmolLM|Olmo|Apertus/) { name=$i; break }
-        print done "/" total " " name
+        name = ""
+        for (i = 1; i <= NF; i++) if ($i ~ /apertus|SmolLM|Olmo|Apertus/) { name = $i; break }
+        if (name != "") print status, done "/" total, name
     }
 ' | sort -u)
 
-if [[ -z "$STUCK" ]]; then
-    echo "No stuck ckpts — nothing to resubmit."
+if [[ -z "$TARGETS" ]]; then
+    echo "No ckpts need launching — everything is either complete or already queued."
     exit 0
 fi
 
 submitted=0
 skipped=0
-while IFS=' ' read -r progress name; do
+while IFS=' ' read -r status progress name; do
     [[ -z "$name" ]] && continue
 
     size=""
@@ -67,17 +81,21 @@ while IFS=' ' read -r progress name; do
     done_count=${progress%%/*}
     total_count=${progress##*/}
     remaining=$(( total_count - done_count ))
-    per_task=${PER_TASK_MIN[$size]}
-    wall_min=$(( remaining * per_task + COLD_START_MIN + BUFFER_MIN ))
-    (( wall_min < MIN_WALL_MIN )) && wall_min=$MIN_WALL_MIN
-    (( wall_min > CAP_MIN ))      && wall_min=$CAP_MIN
 
-    hh=$(( wall_min / 60 ))
-    mm=$(( wall_min % 60 ))
-    walltime=$(printf "%02d:%02d:00" $hh $mm)
+    if [[ "$status" == "not_submitted" || "$done_count" -eq 0 ]]; then
+        walltime="$DEFAULT_NEW_WALL"
+    else
+        per_task=${PER_TASK_MIN[$size]}
+        wall_min=$(( remaining * per_task + COLD_START_MIN + BUFFER_MIN ))
+        (( wall_min < MIN_WALL_MIN )) && wall_min=$MIN_WALL_MIN
+        (( wall_min > CAP_MIN ))      && wall_min=$CAP_MIN
+        hh=$(( wall_min / 60 ))
+        mm=$(( wall_min % 60 ))
+        walltime=$(printf "%02d:%02d:00" $hh $mm)
+    fi
 
     if (( DRY_RUN )); then
-        echo "would submit  $walltime  $name  ($progress done, $remaining left)"
+        echo "would submit  $walltime  $name  ($status, $progress done, $remaining left)"
         submitted=$((submitted + 1))
         continue
     fi
@@ -96,9 +114,9 @@ while IFS=' ' read -r progress name; do
                  --export=ALL,CKPT_ITER=$iter \
                  scripts/evaluate.sbatch "$ckpt_path" "$name") \
         || { echo "sbatch FAILED for $name"; skipped=$((skipped + 1)); continue; }
-    echo "Submitted $JOB_ID  $name  ($walltime, $progress done, $remaining left)"
+    echo "Submitted $JOB_ID  $name  ($walltime, $status, $progress done, $remaining left)"
     submitted=$((submitted + 1))
-done <<< "$STUCK"
+done <<< "$TARGETS"
 
 echo ""
 echo "Total submitted: $submitted ; skipped: $skipped"

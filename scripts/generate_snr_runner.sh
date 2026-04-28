@@ -1,25 +1,36 @@
 #!/bin/bash
 # Generate a self-contained SNR stage runner from a models file (stdout).
-# Usage: generate_snr_runner.sh --models <file> [--include SUBSTR] (--last N | --total T) > runners/snr_<stage>.sh
+# Usage: generate_snr_runner.sh --models <file> [--include SUBSTR] \
+#                               (--last N | --total T) [--dense-tail D] [--tail-pct P] \
+#                               > runners/snr_<stage>.sh
 # Then: bash scripts/launch_evaluations.sh snr-<stage> --script runners/snr_<stage>.sh [flags]
+#
+# --dense-tail and --tail-pct are forwarded to list_checkpoints.sh; see
+# its --help for semantics. Use them to add denser late-training picks on
+# top of the evenly-spaced primary set.
 set -euo pipefail
 
 LIST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/list_checkpoints.sh"
 
-MODELS_FILE=""; MODE=""; COUNT=""; INCLUDE=""
+MODELS_FILE=""; MODE=""; COUNT=""; INCLUDE=""; DENSE=""; TAIL_PCT=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --models)         MODELS_FILE="$2"; shift 2 ;;
         --include)        INCLUDE="$2"; shift 2 ;;
         --last|--total)   MODE="$1"; COUNT="$2"; shift 2 ;;
-        *) echo "Usage: $0 --models <file> [--include SUBSTR] (--last N | --total T)" >&2; exit 1 ;;
+        --dense-tail)     DENSE="$2"; shift 2 ;;
+        --tail-pct)       TAIL_PCT="$2"; shift 2 ;;
+        *) echo "Usage: $0 --models <file> [--include SUBSTR] (--last N | --total T) [--dense-tail D] [--tail-pct P]" >&2; exit 1 ;;
     esac
 done
 [[ -f "$MODELS_FILE" && -n "$MODE" ]] \
-    || { echo "Usage: $0 --models <file> [--include SUBSTR] (--last N | --total T)" >&2; exit 1; }
+    || { echo "Usage: $0 --models <file> [--include SUBSTR] (--last N | --total T) [--dense-tail D] [--tail-pct P]" >&2; exit 1; }
 
 LIST_FILTER=()
 [[ -n "$INCLUDE" ]] && LIST_FILTER+=(--include "$INCLUDE")
+LIST_TAIL=()
+[[ -n "$DENSE" ]] && LIST_TAIL+=(--dense-tail "$DENSE")
+[[ -n "$TAIL_PCT" ]] && LIST_TAIL+=(--tail-pct "$TAIL_PCT")
 
 derive_name() {
     local m="${1#https://huggingface.co/}"
@@ -33,7 +44,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
     [[ -z "$line" || "$line" == \#* ]] && continue
     base=$(derive_name "$line")
-    if ! selected=$(bash "$LIST" "$line" "${LIST_FILTER[@]}" "$MODE" "$COUNT" 2>/dev/null); then
+    if ! selected=$(bash "$LIST" "$line" "${LIST_FILTER[@]}" "$MODE" "$COUNT" "${LIST_TAIL[@]}" 2>/dev/null); then
         echo "# WARNING: enumeration failed: $line" >&2; continue
     fi
     case "$line" in
@@ -55,10 +66,13 @@ done < "$MODELS_FILE"
 
 REGEN_INC=""
 [[ -n "$INCLUDE" ]] && REGEN_INC=" --include $INCLUDE"
+REGEN_TAIL=""
+[[ -n "$DENSE" ]] && REGEN_TAIL+=" --dense-tail $DENSE"
+[[ -n "$TAIL_PCT" ]] && REGEN_TAIL+=" --tail-pct $TAIL_PCT"
 
 echo "#!/bin/bash"
-echo "# SNR stage runner - GENERATED from $MODELS_FILE (selection:$REGEN_INC $MODE $COUNT)"
-echo "# Regenerate: bash scripts/generate_snr_runner.sh --models $MODELS_FILE${REGEN_INC} $MODE $COUNT > \$0"
+echo "# SNR stage runner - GENERATED from $MODELS_FILE (selection:$REGEN_INC $MODE $COUNT$REGEN_TAIL)"
+echo "# Regenerate: bash scripts/generate_snr_runner.sh --models $MODELS_FILE${REGEN_INC} $MODE $COUNT${REGEN_TAIL} > \$0"
 
 if [[ -s "$MEG" ]]; then
     cat <<'EOF'
