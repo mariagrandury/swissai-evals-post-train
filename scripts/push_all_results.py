@@ -3,26 +3,32 @@
 
 Groups every NAME under <eval_logs>/<entity>/<project>/ by its model
 (stripping `-iter<N>`, `-step<N>`, `-stage<K>-step-?<N>`, `-main`, etc.),
-then pushes one resumeable W&B run per model with two x-axis views per
-benchmark: tokens consumed and FLOPs (≈ 6 × params × tokens).
+then pushes one resumeable W&B run per model. Default chart axes:
+x = FLOPs (≈ 6 × params × tokens), y = metric value clamped to [0, 1].
 
-Each ckpt is logged as a step containing both keyspaces:
+Each ckpt is logged as a step:
 
   for each ckpt: run.log({
       "iter": <N>, "tokens": T, "flops": F,
-      "tokens/<task>/acc": v,
-      "flops/<task>/acc": v,
+      "<task>/acc": v,
+      "<task>/exact_match": v,   # mgsm-style, only when no acc
       ...
   })
 
-`define_metric("tokens/*", step_metric="tokens")` and the analogous
-`flops/*` mapping mean every benchmark gets two charts — one per axis —
-on the W&B workspace, each with a line per model. Tokens is the
-intuitive "data seen" view; FLOPs is the compute-fair view for
-comparing differently-sized models on the same x.
+`define_metric("*", step_metric="flops")` makes flops the default x for
+every chart on the W&B workspace, each with one line per model. The
+`iter` and `tokens` axes are also defined and can be swapped in via
+the W&B UI (Edit panel → X-axis).
 
-Per-task metric: prefer `<...>/acc` only. Fall back to all numeric
-metrics if `acc` is missing (perplexity-only tasks).
+Per-task metric: exactly one — prefer `acc`, fall back to `exact_match`,
+skip the task otherwise (see `flatten`). Subtopic tasks (e.g.
+`mmlu_anatomy`, `global_mmlu_full_zh_stem`) collapse into their parent
+aggregate (e.g. `mmlu`, `global_mmlu_full_zh`) when the parent is
+present (see `aggregate_parents`).
+
+After bulk push, a saved workspace view is created with one LinePlot
+per benchmark, x=flops, range_y=(0, 1). Requires the optional
+`wandb-workspaces` package; gracefully skipped if missing.
 
 Idempotent — W&B run id is `<model>` (sanitised), so re-runs resume the
 same run and accumulate new ckpts. Re-logging the same step appends a
@@ -135,61 +141,89 @@ def parse_name(name: str) -> dict | None:
 
 
 def collect(name_dir: Path) -> dict[str, dict]:
-    """Union of every results_*.json under harness/. Merged files take
-    precedence over per-task partials for the same task name."""
+    """Union of every results_*.json under harness/. Pulls both `results`
+    (per-task scores) and `groups` (aggregate scores like `mmlu` that the
+    merge step strips). Merged files take precedence over per-task partials
+    for the same task name."""
     scores: dict[str, dict] = {}
+
+    def merge_file(path: Path, override: bool):
+        try:
+            data = json.loads(path.read_text())
+        except Exception:
+            return
+        for source in ("results", "groups"):
+            for k, v in (data.get(source) or {}).items():
+                if isinstance(v, dict) and (override or k not in scores):
+                    scores[k] = v
+
     base = name_dir / "harness"
     if not base.is_dir():
         return scores
     for f in sorted(base.glob("eval_*/results_*.json")):
-        try:
-            data = json.loads(f.read_text())
-        except Exception:
-            continue
-        for k, v in (data.get("results") or {}).items():
-            if isinstance(v, dict):
-                scores[k] = v
+        merge_file(f, override=True)
     for f in sorted(base.glob("eval_*/per_task/*/*/results_*.json")):
-        try:
-            data = json.loads(f.read_text())
-        except Exception:
-            continue
-        for k, v in (data.get("results") or {}).items():
-            if isinstance(v, dict):
-                scores.setdefault(k, v)
+        merge_file(f, override=False)
     return scores
+
+
+def aggregate_parents(scores: dict[str, dict]) -> dict[str, dict]:
+    """Drop subtopic tasks if their parent aggregate is also in `scores`.
+
+    A task `T` is a subtopic of `P` iff `P` is an underscore-prefix of `T`
+    AND `P` is itself in `scores`. So if both `mmlu` (aggregate from `groups`)
+    and `mmlu_anatomy` are present, only `mmlu` survives. Same for
+    `global_mmlu_full_zh` vs `global_mmlu_full_zh_stem`,
+    `global_mmlu_full_zh_humanities`, …
+
+    Singleton benchmarks with no parent (`arc_challenge`, `belebele_eng_Latn`,
+    `hellaswag`) pass through untouched.
+    """
+    keys = set(scores)
+
+    def has_parent(task: str) -> bool:
+        parts = task.split("_")
+        for i in range(len(parts) - 1, 0, -1):
+            if "_".join(parts[:i]) in keys:
+                return True
+        return False
+
+    return {t: v for t, v in scores.items() if not has_parent(t)}
 
 
 def flatten(scores: dict[str, dict]) -> dict[str, float]:
     """{task: {'metric,filter': val}} → {'task/metric': val}.
 
-    Per task: if `acc` is present, push *only* `<task>/acc`. Otherwise push
-    every numeric metric for the task (collapsing the `,none` filter suffix
-    to a bare name; keeping real filters in the key, e.g. `acc,strict-match`).
+    Exactly one metric per task: prefer `acc`; fall back to `exact_match`
+    (mgsm-style); skip the task otherwise. Stderr / acc_norm / acc_bytes /
+    degeneration are intentionally dropped — the workspace charts only show
+    the headline number per benchmark.
     """
     out: dict[str, float] = {}
     for task, metrics in scores.items():
         if not isinstance(metrics, dict):
             continue
-        acc_raw = next(
+        acc_key = next(
             (k for k in metrics if k.split(",", 1)[0].strip() == "acc"),
             None,
         )
-        if acc_raw is not None:
-            val = metrics[acc_raw]
-            if isinstance(val, (int, float)):
-                out[f"{task}/acc"] = float(val)
+        if acc_key is not None:
+            v = metrics[acc_key]
+            if isinstance(v, (int, float)):
+                out[f"{task}/acc"] = float(v)
             continue
-        for raw, val in metrics.items():
-            if raw == "alias" or not isinstance(val, (int, float)):
-                continue
-            metric = raw.split(",", 1)[0].strip() if raw.endswith(",none") else raw
-            out[f"{task}/{metric}"] = float(val)
+        em_key = next(
+            (k for k in metrics if k.split(",", 1)[0].strip() == "exact_match"),
+            None,
+        )
+        if em_key is not None:
+            v = metrics[em_key]
+            if isinstance(v, (int, float)):
+                out[f"{task}/exact_match"] = float(v)
     return out
 
 
-RUN_ID_SUFFIX = "-v3"   # bump if W&B blacklists existing IDs (409 on re-create after delete)
-LOG_BATCH_SIZE = 200    # max keys per run.log() call — keeps each upload payload small
+RUN_ID_SUFFIX = "-v6"   # bump if W&B blacklists existing IDs (409 on re-create after delete)
 
 
 def push_one(model: str, params: int | None,
@@ -197,17 +231,10 @@ def push_one(model: str, params: int | None,
              entity: str, project: str):
     """Open/resume one W&B run for `model` and log each (step, tokens, flat).
 
-    Keyspace is per task so the W&B workspace groups one section per task
-    (e.g. `hellaswag_es`) with up to four charts inside:
-
-      <task>/<metric>_vs_iter   step_metric=iter
-      <task>/<metric>_vs_tokens step_metric=tokens
-      <task>/<metric>_vs_flops  step_metric=flops    (skipped if params unknown)
-      <task>/duration_vs_flops  step_metric=flops    (only if eval_duration known)
-
-    `<metric>` is whatever flatten() emitted — typically `acc`. flops = 6 ×
-    params × tokens. Per-ckpt metrics are sent in batches of LOG_BATCH_SIZE
-    keys so a single run.log() call never pushes 2k+ keys at once.
+    One metric per task (`<task>/acc` or `<task>/exact_match`, see
+    `flatten`). Default x-axis is `flops` (= 6 × params × tokens) — the
+    compute-fair view across model sizes. `iter` and `tokens` are also
+    logged so the chart's x-axis can be swapped in the W&B UI.
     """
     import wandb
     wb_id = re.sub(r"[^A-Za-z0-9_-]+", "_", model)[:128] + RUN_ID_SUFFIX
@@ -222,69 +249,72 @@ def push_one(model: str, params: int | None,
         settings=wandb.Settings(init_timeout=300),
     )
 
-    # Axis metrics first.
+    # Axes available for every chart's x. Default x = flops.
     run.define_metric("iter")
     run.define_metric("tokens")
     run.define_metric("flops")
     run.define_metric("eval_duration_seconds")
-
-    # Discover every (task, metric) pair across all ckpts so we can define
-    # their step_metric mapping up-front.
-    have_duration = False
-    pairs: set[tuple[str, str]] = set()
-    for _, _, flat in entries:
-        for k in flat:
-            if k == "eval_duration_seconds":
-                have_duration = True
-                continue
-            task, _, metric = k.partition("/")
-            if metric:
-                pairs.add((task, metric))
-
-    tasks = {t for t, _ in pairs}
-    for task, metric in pairs:
-        run.define_metric(f"{task}/{metric}_vs_iter", step_metric="iter")
-        run.define_metric(f"{task}/{metric}_vs_tokens", step_metric="tokens")
-        if params is not None:
-            run.define_metric(f"{task}/{metric}_vs_flops", step_metric="flops")
-    if have_duration and params is not None:
-        for task in tasks:
-            run.define_metric(f"{task}/duration_vs_flops", step_metric="flops")
+    run.define_metric("*", step_metric="flops")
 
     for step, tokens, flat in entries:
         flops = 6 * params * tokens if params else None
         duration = flat.get("eval_duration_seconds")
 
-        items: list[tuple[str, float]] = []
+        log: dict[str, float] = {"iter": step, "tokens": tokens}
+        if flops is not None:
+            log["flops"] = flops
+        if duration is not None:
+            log["eval_duration_seconds"] = duration
+
         for k, v in flat.items():
             if k == "eval_duration_seconds":
                 continue
-            task, _, metric = k.partition("/")
-            if not metric:
-                continue
-            items.append((f"{task}/{metric}_vs_iter", v))
-            items.append((f"{task}/{metric}_vs_tokens", v))
-            if flops is not None:
-                items.append((f"{task}/{metric}_vs_flops", v))
-                if duration is not None:
-                    # Replicate duration per task so it shows in each task section.
-                    items.append((f"{task}/duration_vs_flops", duration))
+            log[k] = v
 
-        # Axis values ride on every batch — wandb dedupes per internal step
-        # but having them present keeps each batch self-describing.
-        axis: dict[str, float] = {"iter": step, "tokens": tokens}
-        if flops is not None:
-            axis["flops"] = flops
-        if duration is not None:
-            axis["eval_duration_seconds"] = duration
+        # One log call per ckpt → each metric's history has exactly N points
+        # (one per ckpt). With ≥ 2 points wandb auto-renders as a line plot.
+        run.log(log)
 
-        for i in range(0, len(items), LOG_BATCH_SIZE):
-            run.log({**axis, **dict(items[i : i + LOG_BATCH_SIZE])})
-
-    n_metrics = sum(len(m) for _, _, m in entries)
-    suffix = "" if params else " (no params known → flops/* charts skipped)"
-    print(f"  pushed {model}: {len(entries)} ckpt(s), {n_metrics} metric point(s){suffix} → {run.url}")
+    n_keys = sum(1 for _, _, m in entries for k in m if k != "eval_duration_seconds")
+    suffix = "" if params else " (no params known → flops chart will be empty)"
+    print(f"  pushed {model}: {len(entries)} ckpt(s), {n_keys} metric value(s){suffix} → {run.url}")
     run.finish()
+
+
+def setup_workspace(entity: str, project: str, metrics: set[str]) -> None:
+    """Create/update a saved view 'flops vs metric (y∈[0,1])' with one
+    LinePlot per `<task>/<metric>` key, x=flops, y-axis clamped to [0, 1].
+
+    Skipped silently if `wandb-workspaces` is not installed or the API call
+    fails (e.g. no internet from the calling host)."""
+    if not metrics:
+        return
+    try:
+        import wandb_workspaces.workspaces as ws
+        import wandb_workspaces.reports.v2 as wr
+    except ModuleNotFoundError:
+        print("(wandb-workspaces not installed → skipping y∈[0,1] workspace setup)")
+        return
+
+    sections = [
+        ws.Section(
+            name=metric.split("/", 1)[0],
+            panels=[wr.LinePlot(title=metric, x="flops", y=[metric], range_y=(0.0, 1.0))],
+        )
+        for metric in sorted(metrics)
+    ]
+    workspace = ws.Workspace(
+        entity=entity, project=project,
+        name="flops vs metric (y in [0,1])",
+        sections=sections, auto_generate_panels=False,
+    )
+    try:
+        workspace.save()
+    except Exception as e:
+        print(f"(workspace setup failed: {e!r} — runs are still pushed; configure y-axis manually in UI)")
+        return
+    print(f"  saved workspace 'flops vs metric (y in [0,1])' "
+          f"with {len(sections)} panels → https://wandb.ai/{entity}/{project}")
 
 
 def main():
@@ -306,7 +336,7 @@ def main():
 
     # Single-NAME mode: just this one ckpt.
     if args.name:
-        flat = flatten(collect(project_dir / args.name))
+        flat = flatten(aggregate_parents(collect(project_dir / args.name)))
         if not flat:
             sys.exit(f"No results found for {args.name}")
         parsed = parse_name(args.name)
@@ -331,12 +361,13 @@ def main():
     grouped: dict[str, list[tuple[int, int, dict[str, float]]]] = defaultdict(list)
     skipped: list[str] = []
 
+    all_metrics: set[str] = set()
     for name_dir in sorted(project_dir.iterdir()):
         if not name_dir.is_dir():
             continue
         if pat and not pat.search(name_dir.name):
             continue
-        flat = flatten(collect(name_dir))
+        flat = flatten(aggregate_parents(collect(name_dir)))
         if not flat:
             continue
         parsed = parse_name(name_dir.name)
@@ -344,6 +375,7 @@ def main():
             skipped.append(name_dir.name)
             continue
         grouped[parsed["model"]].append((parsed["step"], parsed["tokens"], flat))
+        all_metrics.update(k for k in flat if k != "eval_duration_seconds")
 
     for model in grouped:
         grouped[model].sort(key=lambda e: e[0])
@@ -371,6 +403,8 @@ def main():
 
     for model, entries in sorted(grouped.items()):
         push_one(model, model_params(model), entries, args.entity, args.project)
+
+    setup_workspace(args.entity, args.project, all_metrics)
 
     print(f"\nDone. View at: https://wandb.ai/{args.entity}/{args.project}")
 

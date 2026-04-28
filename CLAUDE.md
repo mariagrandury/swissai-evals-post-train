@@ -17,7 +17,9 @@ Two parallel tracks at any given time:
 1. **Eval submissions on the cluster** (this repo). Slurm jobs invoke
    [`scripts/evaluate.sbatch`](scripts/evaluate.sbatch) which calls
    [`scripts/_run_per_task.sh`](scripts/_run_per_task.sh) inside an enroot/pyxis
-   container, runs `lm_eval` once per task, merges results, uploads to W&B.
+   container, runs `lm_eval` once per task, merges results, and pushes to W&B
+   via [`scripts/push_all_results.py --name $NAME --eval-duration $DURATION`](scripts/push_all_results.py)
+   (per-model curve, one step per ckpt — see "W&B layout" below).
 
 2. **Pretraining of half-finished custom models** (separate repo at
    `/iopsstor/scratch/cscs/mariagrandury/pretrain/megatron/data-mix-small`).
@@ -302,6 +304,29 @@ to a version that supports it. The non-mid-round Olmo revisions
 (`stage1-step1413814`, `stage3-step11921`) and the `main` revision load fine
 — the issue is specific to the `mix-round5-from-2T-ckpt` retrofit checkpoints.
 
+### 9. W&B blacklists run IDs after deletion
+When you delete a W&B run via the API, its `id` is permanently reserved.
+A subsequent `wandb.init(id=<same>, resume="allow")` returns HTTP 409
+(`run X was previously created and deleted; try a new run id`). The wandb
+client retries 21 times before giving up — symptoms look like a slow
+`init_timeout` to the caller. Fix: **don't delete runs** — they're cheap.
+If you really need to replace, bump `RUN_ID_SUFFIX` in
+[`scripts/push_all_results.py`](scripts/push_all_results.py) (currently
+`-v6`) so new pushes use fresh IDs. The display `name` stays clean (it's
+just the model name). Also pass `settings=wandb.Settings(init_timeout=300)`
+on `wandb.init` from the login node — the default 90 s occasionally trips
+under bursty traffic.
+
+### 10. Single-history-point metrics render as bar charts in W&B
+W&B's auto-workspace picks panel type per metric: ≥ 2 history points →
+line plot; exactly 1 → bar chart with run name on the y-axis. Tasks that
+only land on single-ckpt runs (e.g. `xnli_zh`, `multiblimp_arb`,
+`global_mmlu_full_zh` evaluated only on Apertus-8B/Olmo-stage1) therefore
+render as bars while same-task multi-ckpt runs (175M-fwEdu*) render as
+lines. Not a bug — just data sparsity. The custom workspace view built
+by the `wandb-workspaces` script forces `LinePlot` with `range_y=(0,1)`
+regardless of point count, side-stepping the auto-pick.
+
 ---
 
 ## Smoke tests (when you change `evaluate.sbatch` / `_run_per_task.sh`)
@@ -333,29 +358,82 @@ don't break recognition).
 
 ---
 
+## W&B layout (per-model curves, single metric per benchmark) {#wb-layout}
+
+Project: [`mariagrandury-epflnlp/snr-experiments`](https://wandb.ai/mariagrandury-epflnlp/snr-experiments).
+The previous incarnation of this project (with per-subtopic charts and
+default x=tokens) was renamed to `snr-experiments-legacy` on 2026-04-28
+when the schema below landed; the live project is a clean rebuild.
+
+[`scripts/push_all_results.py`](scripts/push_all_results.py) is the single
+entry point. It does **two** jobs:
+
+- **Single-NAME** (called from `evaluate.sbatch` / `aggregate_splits.sbatch`
+  inside the pyxis container after a successful eval):
+  `python scripts/push_all_results.py --name $NAME --eval-duration $DURATION`.
+  Appends one step to the model's W&B run.
+- **Bulk rescue** (login node, with the `snr` conda env that has wandb 0.25):
+  `/users/mariagrandury/miniconda3/envs/snr/bin/python scripts/push_all_results.py`.
+  Walks every NAME under `eval_logs/.../snr-experiments/`, groups by model,
+  pushes the union of disk results, then saves the workspace view (below).
+
+**Run shape**:
+- One W&B run per *model* (not per ckpt). Run id = `<sanitised-model-name><RUN_ID_SUFFIX>`.
+  The id suffix exists because deleting a wandb run blacklists its id (bug 9).
+- Each ckpt = one `run.log({...})` call → one history step.
+- Logged per ckpt: bare `iter`, `tokens`, `flops`, optional `eval_duration_seconds`,
+  plus exactly one `<task>/acc` (or `<task>/exact_match`) per benchmark.
+- `define_metric("*", step_metric="flops")` makes flops the default x-axis.
+  `iter` and `tokens` are also defined and can be swapped in via the W&B UI
+  (Edit panel → X-axis).
+
+**Per-benchmark metric** — `flatten()`: prefer `acc`; fall back to
+`exact_match` (mgsm-style); skip the task otherwise. `acc_norm`,
+`acc_bytes`, `degeneration`, all `*_stderr` are intentionally dropped.
+
+**Subtopic aggregation** — `aggregate_parents()`: a task `T` is collapsed
+into its parent `P` if `P` is an underscore-prefix of `T` and `P` is also
+in the results. So `mmlu_anatomy`, `mmlu_humanities`, … all fold into
+`mmlu`; `global_mmlu_full_zh_stem`, `global_mmlu_full_zh_humanities`, …
+fold into `global_mmlu_full_zh`. The merge step strips the `groups` field
+that holds aggregates like `mmlu`, so `collect()` reads both `results`
+and `groups` from per-task fragments to recover them.
+
+**Tokens/FLOPs** — computed at push time; FLOPs ≈ `6 × params × tokens`:
+- Megatron iter→tokens: `iter × 504 × 4096` (`MEG_TOKENS_PER_ITER`)
+- HF stage→cumulative tokens: `HF_STAGE_TOKENS` lookup table at the top of the script
+  (Olmo-3 stages 1/2/3, SmolLM3-3B-checkpoints stages 1/2/3)
+- HF main→tokens: `HF_MAIN_TOKENS` (Apertus-8B/70B-2509 → 15 T)
+- Params: parsed from the model name (`apertus-NB-…`, `<repo>-NB-…`)
+- If we don't know params for some new model, FLOPs is skipped — the iter and
+  tokens charts still work. Add it to the lookup before pushing.
+
+**Workspace view** "flops vs metric (y in [0,1])" — one `LinePlot` per
+benchmark with `x="flops"`, `range_y=(0, 1)`. Built automatically by
+`setup_workspace()` at the end of every bulk push (uses
+`wandb-workspaces`, installed in the `snr` conda env; gracefully skipped
+in the pyxis container which lacks it). The default project view is
+wandb's auto-workspace and will mix bar/line per bug 10 — point
+colleagues at the named view instead.
+
+---
+
 ## Rescue procedure (when a job hits Slurm wall before merging)
 
 `_run_per_task.sh` writes per-task results to `eval_*/per_task/<task>/` **as
 each task finishes**. If Slurm kills the job mid-loop, only the in-progress
-task is lost; everything already finished survives on disk. To merge survivors
-+ upload to W&B without resubmitting:
+task is lost; everything already finished survives on disk. The next bulk
+push picks them up automatically (idempotent), so the simplest "rescue" is:
 
 ```bash
-RUN=mariagrandury-epflnlp/snr-experiments
-NAME=apertus-350M-fwEdu60-fw240-seed1904-iter50000
-EVAL_DIR=$(ls -td /iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/eval_logs/$RUN/$NAME/harness/eval_*_<jobid> | head -1)
-
-cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train
-python -m scripts.alignment.merge_split_results \
-    --split_dirs "$EVAL_DIR"/per_task/*/ --output_dir "$EVAL_DIR"
-python -m scripts.alignment.update_wandb_alignment \
-    --entity mariagrandury-epflnlp --project snr-experiments \
-    --logs_root "$EVAL_DIR" --name "$NAME" --main_metrics "" --eval_duration 0
+/users/mariagrandury/miniconda3/envs/snr/bin/python scripts/push_all_results.py
 ```
 
-Same procedure for `debug_loop.sh` (it produces multiple `eval_*` dirs over
-its lifetime — each is a partial run; the next launch's idempotency check
-sees their per-task subdirs as "done").
+That walks every NAME on disk (incl. unfinished `eval_*/per_task/` dirs) and
+appends any new ckpts to their model's W&B run. Same effect as resubmitting
+the eval job, without the cluster cost. The Megatron-side merge of partial
+results still happens inside `_run_per_task.sh` for any future job — no
+manual `merge_split_results` step required.
 
 ---
 
@@ -394,6 +472,7 @@ EXP_NAME format: `apertus-${MODEL_SIZE}-fwEdu${FW_EDU_RATIO}-fw2${FW2_RATIO}-see
 ## Key recent commits (for context when reviewing changes)
 
 ```
+ab4daf4 push eval results to W&B as one curve per model, not one run per ckpt
 46b3852 fix three bugs that surfaced once real eval jobs started running
 2cc58cf make SNR eval launches idempotent + add progress dashboard + canonical runner
 aec82e0 fix smoke tests 1-4: vllm tokenizer_revision + megatron container/cwd/strictness
