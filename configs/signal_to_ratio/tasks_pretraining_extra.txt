@@ -1,25 +1,12 @@
-paws_en
-paws_es
-paws_eu
-paws_ja
-paws_zh
 truthfulqa-multi_mc1_en
 truthfulqa-multi_mc1_es
 truthfulqa-multi_mc1_eu
-xwinograd_en
-xwinograd_jp
-xwinograd_ru
-xwinograd_zh
 
 
-belebele_tha_Thai
-global_piqa_completions_tha_thai
-mgsm_direct_th
-xcopa_th
-xnli_th
 
-xcopa_eu
-xcopa_sw
-xcopa_tr
-xcopa_vi
-xcopa_zh
+
+
+
+
+
+

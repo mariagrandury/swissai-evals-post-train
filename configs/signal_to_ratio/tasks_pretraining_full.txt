@@ -1,4 +1,5 @@
 arc_challenge
+arc_easy
 arc_ar
 arc_es
 arc_eu
@@ -14,6 +15,7 @@ belebele_jpn_Jpan
 belebele_rus_Cyrl
 belebele_spa_Latn
 belebele_swh_Latn
+belebele_tha_Thai
 belebele_tur_Latn
 belebele_vie_Latn
 belebele_zho_Hans
@@ -35,6 +37,7 @@ global_piqa_completions_jpn_jpan
 global_piqa_completions_rus_cyrl
 global_piqa_completions_spa_latn_spai
 global_piqa_completions_swh_latn
+global_piqa_completions_tha_thai
 global_piqa_completions_tur_latn
 global_piqa_completions_vie_latn
 hellaswag
@@ -66,6 +69,7 @@ xnli_eu
 xnli_hi
 xnli_ru
 xnli_sw
+xnli_th
 xnli_tr
 xnli_vi
 xnli_zh
@@ -83,10 +87,18 @@ mlqa_es_es
 mlqa_hi_hi
 mlqa_vi_vi
 mlqa_zh_zh
-mgsm_direct_en
-mgsm_direct_es
-mgsm_direct_eu
-mgsm_direct_ja
-mgsm_direct_ru
-mgsm_direct_sw
-mgsm_direct_zh
+paws_en
+paws_es
+paws_eu
+paws_ja
+paws_zh
+xcopa_eu
+xcopa_sw
+xcopa_th
+xcopa_tr
+xcopa_vi
+xcopa_zh
+xwinograd_en
+xwinograd_jp
+xwinograd_ru
+xwinograd_zh
