@@ -8,7 +8,11 @@
 #   * partial-progress ckpts: max(30 min, remaining * per_task + cold_start + buffer)
 #   * no-progress ckpts:      12h (full normal-partition cap, default for new ckpts)
 #
-# Usage: bash scripts/launch_ckpts_in_progress.sh [--dry-run]
+# Usage: bash scripts/launch_ckpts_in_progress.sh [--dry-run] [--filter SUBSTR]
+#
+# --filter SUBSTR restricts to ckpt names containing SUBSTR (passed through
+# to snr_progress.py --filter). Useful for per-seed runs, e.g.
+# `--filter seed1904` to skip seed 28 / 1797 entries entirely.
 #
 # Per-task minute estimates (logprob-only, since mgsm is no longer in the
 # task list) are coarse averages from observed runs. Adjust if the typical
@@ -17,7 +21,17 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 DRY_RUN=0
-[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
+FILTER=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run) DRY_RUN=1; shift ;;
+        --filter)  FILTER="$2"; shift 2 ;;
+        *) echo "Unknown flag: $1" >&2; exit 1 ;;
+    esac
+done
+
+PROGRESS_ARGS=()
+[[ -n "$FILTER" ]] && PROGRESS_ARGS+=(--filter "$FILTER")
 
 declare -A PER_TASK_MIN=(["175M"]=3 ["350M"]=5 ["600M"]=6 ["1B"]=8)
 COLD_START_MIN=15      # checkpoint load + container setup
@@ -31,7 +45,7 @@ CKPT_BASE=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/M
 # Pick from snr_progress.py:
 #   * [in_progress] with NO `jobs=` annotation (stuck) — sized walltime
 #   * [not_submitted]                                 — 12h walltime
-TARGETS=$(python3.11 scripts/snr_progress.py 2>&1 | awk '
+TARGETS=$(python3.11 scripts/snr_progress.py "${PROGRESS_ARGS[@]}" 2>&1 | awk '
     /\[in_progress\]/ && !/jobs=/ {
         status = "in_progress"
     }

@@ -8,11 +8,19 @@
 # --dense-tail and --tail-pct are forwarded to list_checkpoints.sh; see
 # its --help for semantics. Use them to add denser late-training picks on
 # top of the evenly-spaced primary set.
+#
+# --unify-iters: take the longest per-model iter list as the canonical set
+# and apply it to ALL Megatron entries. Use when a models file mixes
+# fully-trained and half-trained models (e.g. multiple seeds at different
+# training stages) — keeps the W&B x-axis grid identical across all of them.
+# Half-trained models will list iters they don't have on disk yet; eval jobs
+# targeting those fail at Megatron's --exit-on-missing-checkpoint and the
+# per-task layer reschedules them next launch.
 set -euo pipefail
 
 LIST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/list_checkpoints.sh"
 
-MODELS_FILE=""; MODE=""; COUNT=""; INCLUDE=""; DENSE=""; TAIL_PCT=""
+MODELS_FILE=""; MODE=""; COUNT=""; INCLUDE=""; DENSE=""; TAIL_PCT=""; UNIFY=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --models)         MODELS_FILE="$2"; shift 2 ;;
@@ -20,7 +28,8 @@ while [[ $# -gt 0 ]]; do
         --last|--total)   MODE="$1"; COUNT="$2"; shift 2 ;;
         --dense-tail)     DENSE="$2"; shift 2 ;;
         --tail-pct)       TAIL_PCT="$2"; shift 2 ;;
-        *) echo "Usage: $0 --models <file> [--include SUBSTR] (--last N | --total T) [--dense-tail D] [--tail-pct P]" >&2; exit 1 ;;
+        --unify-iters)    UNIFY=1; shift ;;
+        *) echo "Usage: $0 --models <file> [--include SUBSTR] (--last N | --total T) [--dense-tail D] [--tail-pct P] [--unify-iters]" >&2; exit 1 ;;
     esac
 done
 [[ -f "$MODELS_FILE" && -n "$MODE" ]] \
@@ -40,6 +49,10 @@ derive_name() {
 MEG=$(mktemp); HF=$(mktemp)
 trap 'rm -f "$MEG" "$HF"' EXIT
 
+# Two-pass: collect Megatron entries (and their per-model iter lists), then
+# either emit each model's own list or a unified canonical list across all of
+# them (--unify-iters). HF entries always use their per-repo list.
+MEG_BASES=(); MEG_PATHS=(); MEG_ITERS_LIST=()
 while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
     [[ -z "$line" || "$line" == \#* ]] && continue
@@ -49,10 +62,9 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     fi
     case "$line" in
         /iopsstor*|/capstor*)
-            ckpt="${line%/}"
-            while IFS= read -r it; do
-                printf '    ["%s-iter%s"]="%s"\n' "$base" "$it" "$ckpt" >> "$MEG"
-            done <<< "$selected" ;;
+            MEG_BASES+=("$base")
+            MEG_PATHS+=("${line%/}")
+            MEG_ITERS_LIST+=("$selected") ;;
         https://huggingface.co/*)
             repo="${line#https://huggingface.co/}"
             while IFS= read -r br; do
@@ -62,6 +74,32 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     esac
 done < "$MODELS_FILE"
 
+# Canonical iter list: longest among collected Megatron entries (ties broken
+# by max iter so a fully-trained model wins over a half-trained one).
+CANONICAL_ITERS=""
+if (( UNIFY )) && (( ${#MEG_ITERS_LIST[@]} > 0 )); then
+    best_n=-1; best_max=-1; best_idx=0
+    for i in "${!MEG_ITERS_LIST[@]}"; do
+        its="${MEG_ITERS_LIST[$i]}"
+        n=$(echo "$its" | grep -c .)
+        max_it=$(echo "$its" | sort -n | tail -1)
+        if (( n > best_n || (n == best_n && max_it > best_max) )); then
+            best_n=$n; best_max=$max_it; best_idx=$i
+        fi
+    done
+    CANONICAL_ITERS="${MEG_ITERS_LIST[$best_idx]}"
+fi
+
+for i in "${!MEG_BASES[@]}"; do
+    base="${MEG_BASES[$i]}"
+    ckpt="${MEG_PATHS[$i]}"
+    iters="${CANONICAL_ITERS:-${MEG_ITERS_LIST[$i]}}"
+    while IFS= read -r it; do
+        [[ -z "$it" ]] && continue
+        printf '    ["%s-iter%s"]="%s"\n' "$base" "$it" "$ckpt" >> "$MEG"
+    done <<< "$iters"
+done
+
 [[ -s "$MEG" || -s "$HF" ]] || { echo "No checkpoints selected." >&2; exit 1; }
 
 REGEN_INC=""
@@ -69,10 +107,12 @@ REGEN_INC=""
 REGEN_TAIL=""
 [[ -n "$DENSE" ]] && REGEN_TAIL+=" --dense-tail $DENSE"
 [[ -n "$TAIL_PCT" ]] && REGEN_TAIL+=" --tail-pct $TAIL_PCT"
+REGEN_UNIFY=""
+(( UNIFY )) && REGEN_UNIFY=" --unify-iters"
 
 echo "#!/bin/bash"
-echo "# SNR stage runner - GENERATED from $MODELS_FILE (selection:$REGEN_INC $MODE $COUNT$REGEN_TAIL)"
-echo "# Regenerate: bash scripts/generate_snr_runner.sh --models $MODELS_FILE${REGEN_INC} $MODE $COUNT${REGEN_TAIL} > \$0"
+echo "# SNR stage runner - GENERATED from $MODELS_FILE (selection:$REGEN_INC $MODE $COUNT$REGEN_TAIL$REGEN_UNIFY)"
+echo "# Regenerate: bash scripts/generate_snr_runner.sh --models $MODELS_FILE${REGEN_INC} $MODE $COUNT${REGEN_TAIL}${REGEN_UNIFY} > \$0"
 
 if [[ -s "$MEG" ]]; then
     cat <<'EOF'
