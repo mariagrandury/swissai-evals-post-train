@@ -33,11 +33,11 @@ done
 PROGRESS_ARGS=()
 [[ -n "$FILTER" ]] && PROGRESS_ARGS+=(--filter "$FILTER")
 
-declare -A PER_TASK_MIN=(["175M"]=3 ["350M"]=5 ["600M"]=6 ["1B"]=8)
+declare -A PER_TASK_MIN=(["175M"]=4 ["350M"]=6 ["600M"]=8 ["1B"]=10)
 COLD_START_MIN=15      # checkpoint load + container setup
 BUFFER_MIN=10
 MIN_WALL_MIN=30
-CAP_MIN=719            # 11:59:00 — max for normal partition with 1 min margin
+CAP_MIN=719            # 11:59:00 — max for normal partition
 DEFAULT_NEW_WALL="11:59:00"   # for ckpts with no progress yet
 
 CKPT_BASE=/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/Meg-Runs/data-mix-small
