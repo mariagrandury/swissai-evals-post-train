@@ -10,8 +10,12 @@ Splits emitted:
   - reference_hf:       Apertus-8B/70B (main) + Olmo-3 stages + SmolLM3 stages
 
 Usage:
+  # Local eval_logs only (default)
   python scripts/build_hf_dataset.py --out-dir /tmp/snr-hf-dataset --dry-run
-  python scripts/build_hf_dataset.py --push --repo-id epfl-nlp/multilingual-snr-eval-results
+
+  # Local + remote epfl-nlp/multilingual-evals
+  python scripts/build_hf_dataset.py --include-multilingual-evals \\
+      --push --repo-id multilingual-snr/multilingual-snr-eval-results
 """
 from __future__ import annotations
 
@@ -298,6 +302,317 @@ def build_rows(project_dir: Path) -> list[dict]:
     return rows
 
 
+# --- Colleague's epfl-nlp/multilingual-evals dataset ----------------------
+#
+# Layout: raw/<benchmark>/<model_dir>/[<ckpt_dir>/[<inner_repo>/]]results_*.json
+#
+# Models / checkpoint conventions observed at listing time:
+#   apertus-8b-2509:
+#     - main
+#     - step<N>-tokens<X>(B|T)            ← explicit tokens in dir name
+#     - depth-3 (no ckpt)                 ← treated as `main`
+#   olmo-3-1025-7b:
+#     - stage1-step<N>                    ← linear-interp tokens to 6T@1413814
+#   smollm3-3b-checkpoints:
+#     - stage1-step-<N>  (note hyphen)    ← linear-interp tokens to 7.2T@3440000
+#   smollm3-3b-base:
+#     - HuggingFaceTB__SmolLM3-3B-Base    ← internal lm-eval output dir; alias to `main`
+#     - depth-3 (no ckpt)                 ← treated as `main`
+
+MULTILINGUAL_EVALS_REPO = "epfl-nlp/multilingual-evals"
+
+# All remote raw/ sources to merge from. Listed in priority order — when
+# the same (model, revision, task) appears in multiple repos, the first
+# repo's value wins (dedupe is order-preserving).
+#
+# `epfl-nlp/multilingual-evals` is intentionally omitted: that org's private
+# storage is over quota, so downloads return 403. The multilingual-snr repo
+# already contains a superset of those files.
+RAW_SOURCE_REPOS = [
+    "multilingual-snr/multilingual-snr-eval-results",
+]
+
+# (model_dir → display model name, params, size_str, model_type, split)
+MULTILINGUAL_EVAL_MODELS = {
+    "apertus-8b-2509": {
+        "model": "Apertus-8B-2509",
+        "params": 8_000_000_000,
+        "size": "8B",
+        "model_type": "reference_hf",
+        "split": "reference_hf",
+    },
+    "olmo-3-1025-7b": {
+        "model": "Olmo-3-1025-7B",
+        "params": 7_000_000_000,
+        "size": "7B",
+        "model_type": "reference_hf",
+        "split": "reference_hf",
+    },
+    "smollm3-3b-checkpoints": {
+        "model": "SmolLM3-3B-checkpoints",
+        "params": 3_000_000_000,
+        "size": "3B",
+        "model_type": "reference_hf",
+        "split": "reference_hf",
+    },
+    "smollm3-3b-base": {
+        "model": "SmolLM3-3B-Base",
+        "params": 3_000_000_000,
+        "size": "3B",
+        "model_type": "reference_hf",
+        "split": "reference_hf",
+    },
+}
+
+# Linear-interpolation references for stage1 intermediate steps. Each tuple
+# is (final_step, tokens_at_final_step). Implies tokens_per_step = b/a.
+STAGE1_TOKENS_PER_STEP = {
+    "Olmo-3-1025-7B": 6_000_000_000_000 / 1_413_814,
+    "SmolLM3-3B-checkpoints": 7_200_000_000_000 / 3_440_000,
+}
+
+
+def parse_ckpt_dir(model_info: dict, ckpt_dir: str | None) -> dict | None:
+    """Map (model, ckpt_dir) → {model_revision, step, tokens, mix}.
+
+    `ckpt_dir is None` means a depth-3 file under the model dir (no checkpoint
+    subdir) — treated as the `main` revision.
+    """
+    model = model_info["model"]
+
+    # Treat None / 'main' / inner-repo dirs as the canonical 'main' ckpt
+    if ckpt_dir is None or ckpt_dir == "main" or ckpt_dir in {
+        "HuggingFaceTB__SmolLM3-3B-Base",
+        "swiss-ai__Apertus-8B-2509",
+        "allenai__Olmo-3-1025-7B",
+        "HuggingFaceTB__SmolLM3-3B-checkpoints",
+    }:
+        tokens = HF_MAIN_TOKENS.get(model)
+        if tokens is None and model == "SmolLM3-3B-Base":
+            tokens = 11_200_000_000_000  # SmolLM3-3B-Base released as 11.2T tokens
+        return {
+            "model_revision": "main",
+            "step": 0,
+            "tokens": float(tokens) if tokens else None,
+            "mix": "main",
+        }
+
+    # Apertus-style: step<N>-tokens<X>(B|T)
+    m = re.match(r"^step(?P<n>\d+)-tokens(?P<mag>[\d.]+)(?P<unit>[BT])$", ckpt_dir)
+    if m:
+        unit = 1e9 if m.group("unit") == "B" else 1e12
+        tokens = float(m.group("mag")) * unit
+        return {
+            "model_revision": ckpt_dir,
+            "step": int(m.group("n")),
+            "tokens": tokens,
+            "mix": "main",
+        }
+
+    # SmolLM3-checkpoints style: stage<K>-step-<N>  (with hyphen)
+    m = re.match(r"^stage(?P<stage>\d+)-step-(?P<n>\d+)$", ckpt_dir)
+    if m:
+        stage, n = int(m.group("stage")), int(m.group("n"))
+        if stage == 1 and model in STAGE1_TOKENS_PER_STEP:
+            tokens = n * STAGE1_TOKENS_PER_STEP[model]
+        else:
+            tokens = HF_STAGE_TOKENS.get((model, stage))
+            if tokens is None:
+                return None
+            tokens = float(tokens)
+        return {
+            "model_revision": f"stage{stage}-step{n}",
+            "step": n,
+            "tokens": tokens,
+            "mix": f"stage{stage}",
+        }
+
+    # Olmo style: stage<K>-step<N>(-suffix)?
+    m = re.match(r"^stage(?P<stage>\d+)-step(?P<n>\d+)(?:-.*)?$", ckpt_dir)
+    if m:
+        stage, n = int(m.group("stage")), int(m.group("n"))
+        if stage == 1 and model in STAGE1_TOKENS_PER_STEP:
+            tokens = n * STAGE1_TOKENS_PER_STEP[model]
+        else:
+            tokens = HF_STAGE_TOKENS.get((model, stage))
+            if tokens is None:
+                return None
+            tokens = float(tokens)
+        return {
+            "model_revision": ckpt_dir,
+            "step": n,
+            "tokens": tokens,
+            "mix": f"stage{stage}",
+        }
+
+    return None
+
+
+def fetch_multilingual_evals_rows(
+    repo_ids: list[str] | str = MULTILINGUAL_EVALS_REPO,
+) -> list[dict]:
+    """List & download every results_*.json in one or more HF dataset repos
+    that follow the colleague's `raw/<bench>/<model>/<ckpt>/results_*.json`
+    layout. Returns rows in the same shape as build_rows().
+
+    When multiple repos are given, the first repo's path wins on conflict
+    (so order matters: put the more authoritative repo first).
+    """
+    from huggingface_hub import HfApi, hf_hub_download
+
+    if isinstance(repo_ids, str):
+        repo_ids = [repo_ids]
+
+    api = HfApi()
+    # path → (repo_id, path). First repo to list a given relative path wins.
+    seen_path: dict[str, tuple[str, str]] = {}
+    for repo in repo_ids:
+        try:
+            for f in api.list_repo_files(repo, repo_type="dataset"):
+                if f.startswith("raw/") and "/results_" in f and f.endswith(".json"):
+                    seen_path.setdefault(f, (repo, f))
+        except Exception as e:
+            print(f"  warn: list_repo_files({repo}) failed: {e}")
+    files = list(seen_path.values())
+    print(f"Found {len(files)} unique results_*.json files across {len(repo_ids)} repo(s)")
+
+    # Group: (model_dir, ckpt_dir or None) → list[(repo_id, path)]
+    groups: dict[tuple[str, str | None], list[tuple[str, str]]] = defaultdict(list)
+    for repo, f in files:
+        parts = f.split("/")[1:]  # strip raw/
+        # parts: [<bench>, <model>, ...]
+        bench, model_dir = parts[0], parts[1]
+        if model_dir not in MULTILINGUAL_EVAL_MODELS:
+            continue
+        # Determine ckpt_dir based on depth (3/4/5)
+        if len(parts) == 3:
+            ckpt_dir = None
+        elif len(parts) == 4:
+            ckpt_dir = parts[2]
+        elif len(parts) == 5:
+            # raw/<bench>/<model>/<ckpt>/<inner_repo>/results_*.json — use ckpt
+            ckpt_dir = parts[2]
+        else:
+            continue
+        groups[(model_dir, ckpt_dir)].append((repo, f))
+
+    print(f"Grouped into {len(groups)} (model, ckpt) pairs.")
+
+    rows: list[dict] = []
+    skipped: list[str] = []
+    for (model_dir, ckpt_dir), repo_paths in sorted(
+        groups.items(), key=lambda kv: (kv[0][0], kv[0][1] or "")
+    ):
+        info = MULTILINGUAL_EVAL_MODELS[model_dir]
+        ckpt_meta = parse_ckpt_dir(info, ckpt_dir)
+        if ckpt_meta is None:
+            skipped.append(f"{model_dir}/{ckpt_dir}")
+            continue
+
+        # Union of results / groups across every results JSON for this ckpt
+        scores: dict[str, dict] = {}
+        n_shot: dict = {}
+        n_samples: dict = {}
+        proc_time: dict[str, float] = {}
+        model_path = None
+        model_source = None
+        model_args = None
+
+        for repo, remote in repo_paths:
+            try:
+                local = hf_hub_download(repo, remote, repo_type="dataset")
+                data = json.loads(Path(local).read_text())
+            except Exception as e:
+                print(f"  warn: download/parse failed for {remote}: {e}")
+                continue
+            for source in ("results", "groups"):
+                for k, v in (data.get(source) or {}).items():
+                    if isinstance(v, dict) and k not in scores:
+                        scores[k] = v
+            for tk, n in (data.get("n-shot") or {}).items():
+                n_shot.setdefault(tk, n)
+            for tk, ni in (data.get("n-samples") or {}).items():
+                if isinstance(ni, dict):
+                    n_samples.setdefault(tk, ni.get("effective"))
+            # The colleague runs one benchmark per JSON, so total_evaluation_time
+            # is the per-benchmark wall time. Apply it to every task in this file.
+            t = data.get("total_evaluation_time_seconds")
+            if t is not None:
+                try:
+                    t_f = float(t)
+                    for tk in (data.get("results") or {}):
+                        proc_time.setdefault(tk, t_f)
+                except (TypeError, ValueError):
+                    pass
+            if model_source is None:
+                model_source = data.get("model_source")
+            if model_args is None:
+                ma = (data.get("config") or {}).get("model_args") or {}
+                if isinstance(ma, dict):
+                    model_args = ma
+                    model_path = ma.get("pretrained") or ma.get("load")
+
+        if not scores:
+            continue
+
+        params = info["params"]
+        tokens = ckpt_meta["tokens"]
+        flops = (6 * params * tokens) if (params and tokens) else None
+        full_name = f"{info['model']}-{ckpt_meta['model_revision']}"
+
+        for task, raw_metrics in scores.items():
+            if not isinstance(raw_metrics, dict):
+                continue
+            metrics = normalize_metrics(raw_metrics)
+            primary_metric, primary_score = pick_primary(metrics)
+
+            rows.append({
+                "split": info["split"],
+                "task": task,
+                "name": full_name,
+                "model": info["model"],
+                "model_revision": ckpt_meta["model_revision"],
+                "model_type": info["model_type"],
+                "model_path": model_path,
+                "model_source": model_source,
+                "model_params": float(params),
+                "model_tokens": float(tokens) if tokens else None,
+                "flops": float(flops) if flops else None,
+                "step": ckpt_meta["step"],
+                "size": info["size"],
+                "mix": ckpt_meta["mix"],
+                "seed": None,
+                "primary_score": primary_score,
+                "primary_metric": primary_metric,
+                "metrics": metrics,
+                "num_instances": n_samples.get(task),
+                "num_fewshot": n_shot.get(task),
+                "processing_time": proc_time.get(task),
+                "model_config": json.dumps(model_args, sort_keys=True) if model_args else None,
+            })
+
+    if skipped:
+        print(f"  skipped {len(skipped)} (model, ckpt) groups with unknown ckpt format: {skipped[:5]}")
+    print(f"Built {len(rows)} rows from {repo_ids}")
+    return rows
+
+
+def dedupe_rows(rows: list[dict]) -> list[dict]:
+    """If the same (model, model_revision, task) appears in both local and
+    multilingual-evals sources, prefer the local one (which has full lm-eval
+    metadata + per-task processing_time). Stable: input order matters, first
+    occurrence wins."""
+    seen = set()
+    out = []
+    for r in rows:
+        key = (r["model"], r["model_revision"], r["task"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
 def _arrow_schema():
     """Single canonical schema used for every split, so HF Datasets can
     concatenate splits without a cast error (unlike upstream, which
@@ -400,7 +715,7 @@ per-instance predictions.
 | Split | Models | Description |
 |---|---|---|
 | `pretraining_custom` | apertus-{{175M, 350M, 600M, 1B}}-fwEdu{{30,60,90}}-seed1904 | 12 custom megatron pretraining curves at canonical iters {{2k, 6k, 12k, 18k, 22k, 28k, 34k, 38k, 42k, 44k, 46k, 48k, 50k}} |
-| `reference_hf` | Apertus-8B/70B-2509, Olmo-3-1025-7B (stages 1/2/3), SmolLM3-3B (stages 1/2/3) | External reference checkpoints |
+| `reference_hf` | Apertus-8B/70B-2509 (incl. `step<N>-tokens<X>` intermediates), Olmo-3-1025-7B (stage1 intermediates + final), SmolLM3-3B (stage1 intermediates, stages 1/2/3 finals), SmolLM3-3B-Base | External reference checkpoints; merged from local cluster runs and the [`epfl-nlp/multilingual-evals`](https://huggingface.co/datasets/epfl-nlp/multilingual-evals) raw/ folder |
 
 ## Columns
 
@@ -433,7 +748,7 @@ per-instance predictions.
 ```python
 from datasets import load_dataset
 
-ds = load_dataset("epfl-nlp/multilingual-snr-eval-results")
+ds = load_dataset("multilingual-snr/multilingual-snr-eval-results")
 df = ds["pretraining_custom"].to_pandas()
 ```
 
@@ -450,18 +765,36 @@ def main():
     p.add_argument("--out-dir", default="/tmp/snr-hf-dataset",
                    help="Local staging directory for parquet + README")
     p.add_argument("--push", action="store_true", help="After writing, upload to HF")
-    p.add_argument("--repo-id", default="epfl-nlp/multilingual-snr-eval-results",
+    p.add_argument("--repo-id", default="multilingual-snr/multilingual-snr-eval-results",
                    help="HF dataset repo (created if missing)")
     p.add_argument("--private", action="store_true", help="Create private dataset")
+    p.add_argument(
+        "--include-multilingual-evals", action="store_true",
+        help=f"Also pull rows from {MULTILINGUAL_EVALS_REPO}",
+    )
+    p.add_argument(
+        "--multilingual-evals-only", action="store_true",
+        help="Skip the local cluster eval_logs walk; emit rows only from the "
+             "remote multilingual-evals repo.",
+    )
     args = p.parse_args()
 
-    project_dir = LOGS_BASE / args.entity / args.project
-    if not project_dir.is_dir():
-        sys.exit(f"No project dir at {project_dir}")
+    rows: list[dict] = []
+    if not args.multilingual_evals_only:
+        project_dir = LOGS_BASE / args.entity / args.project
+        if not project_dir.is_dir():
+            sys.exit(f"No project dir at {project_dir}")
+        print(f"Walking {project_dir}")
+        rows.extend(build_rows(project_dir))
+        print(f"  {len(rows)} rows from local eval_logs.")
 
-    print(f"Walking {project_dir}")
-    rows = build_rows(project_dir)
-    print(f"Built {len(rows)} rows.")
+    if args.include_multilingual_evals or args.multilingual_evals_only:
+        n_before = len(rows)
+        rows.extend(fetch_multilingual_evals_rows(RAW_SOURCE_REPOS))
+        print(f"  +{len(rows) - n_before} rows from raw sources {RAW_SOURCE_REPOS}.")
+
+    rows = dedupe_rows(rows)
+    print(f"Built {len(rows)} rows after dedupe.")
     if not rows:
         sys.exit("No rows built — nothing to push.")
 
