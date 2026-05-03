@@ -102,3 +102,9 @@ xwinograd_en
 xwinograd_jp
 xwinograd_ru
 xwinograd_zh
+aexams
+cmmlu
+ceval-valid
+arabic_leaderboard_complete
+belebele_tel_Telu
+xstorycloze_te
