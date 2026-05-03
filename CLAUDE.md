@@ -23,10 +23,14 @@ Two parallel tracks at any given time:
 
 2. **Pretraining of half-finished custom models** (separate repo at
    `/iopsstor/scratch/cscs/mariagrandury/pretrain/megatron/data-mix-small`).
-   Five resume jobs were submitted Apr 26 (Slurm ids 1947226–1947230) to take
-   `apertus-175M-fwEdu{30,60,90}-seed1904`, `apertus-600M-fwEdu90-fw210-seed1904`
-   and `apertus-1B-fwEdu90-fw210-seed1904` from their early-stop iters back up
-   to iter 50000.
+   The full sweep now spans **3 seeds** (28, 1797, 1904) — 36 models total.
+   Resume jobs are managed via
+   [`pretrain/megatron/data-mix-small/launch_resumes.sh`](../pretrain/megatron/data-mix-small/launch_resumes.sh),
+   which is idempotent (skips cells that already have a queued/running job by
+   matching the canonical Slurm name) and runs against the
+   `SD-69241-apertus-1-5` reservation. Live status comes from
+   [`scripts/pretrain_progress.py`](scripts/pretrain_progress.py) — see
+   "Pretraining infrastructure" below.
 
 Status snapshot anytime:
 
@@ -40,11 +44,15 @@ sacct -u $USER -S <since-date> -X -o "JobID,JobName%50,State,Elapsed"
 
 ## Models in scope
 
-### Custom megatron checkpoints (12 models, file [models_pretraining_custom_all.txt](configs/signal_to_ratio/models_pretraining_custom_all.txt))
+### Custom megatron checkpoints (36 models, file [models_pretraining_custom_all.txt](configs/signal_to_ratio/models_pretraining_custom_all.txt))
 
 ```
-apertus-{175M,350M,600M,1B}-fwEdu{30,60,90}-fw{270,240,210}-seed1904
+apertus-{175M,350M,600M,1B}-fwEdu{30,60,90}-fw{270,240,210}-seed{28,1797,1904}
 ```
+
+That's the canonical 4 sizes × 3 mixes × 3 seeds. The seed-1904 column landed
+first; seed-28 and seed-1797 are the later additions and are still in flight
+on the reservation as of 2026-05-04.
 
 **Canonical iter set** (10 evenly spaced over the full run + up to 5 dense
 picks from the last 10% of training, deduplicated):
@@ -65,19 +73,14 @@ half-trained ones list iters they don't have on disk yet, marked
 `not_submitted` until resume training catches up).
 
 The runner [`runners/snr_pretraining_all.sh`](runners/snr_pretraining_all.sh) is the
-single-source-of-truth combo: 12 models × 13 iters = 156 cells.
+single-source-of-truth combo: 36 models × 13 iters = 468 cells.
 
-**Half-trained models (don't yet have all canonical iters on disk):**
-
-| Model | Last iter saved | Missing from canonical set |
-|---|---:|---|
-| 175M-fwEdu30/60/90 (×3) | 49180/48351/48948 | only 50000 |
-| 600M-fwEdu90 | 26000 | 28000, 34000, 38000, 42000, 44000, 46000, 48000, 50000 |
-| 1B-fwEdu90 | 14000 | 18000, 22000, 28000, 34000, 38000, 42000, 44000, 46000, 48000, 50000 |
-
-Resume training jobs (1947226–1947230) will fill these in. Until they do,
-eval jobs targeting the missing iters will fail at Megatron's
-`--exit-on-missing-checkpoint`. That's expected —
+**Half-trained models** — the live picture lives in
+[`scripts/pretrain_progress.py`](scripts/pretrain_progress.py); don't hardcode
+a snapshot here. As of 2026-05-04 the seed-1904 column is fully done at iter
+50000, most of seed-1797 is done, and seed-28 is mid-resume. Eval jobs that
+target iters not yet on disk fail at Megatron's `--exit-on-missing-checkpoint`
+— that's expected.
 [`scripts/launch_ckpts_in_progress.sh`](scripts/launch_ckpts_in_progress.sh)
 short-circuits before submitting (skips with "iter dir missing"), and the
 per-task idempotency layer reschedules them next launch once the iter exists.
@@ -476,22 +479,38 @@ on the cluster.
 ## Pretraining infrastructure (separate repo)
 
 `/iopsstor/scratch/cscs/mariagrandury/pretrain/megatron/data-mix-small/` is
-the training submitter. Notable:
+the training submitter. There's a back-of-house memo over there at
+[`pretrain/megatron/data-mix-small/CLAUDE.md`](../pretrain/megatron/data-mix-small/CLAUDE.md);
+read it for the training-side gotchas. Quick orientation:
 
-- `submit-apertus-data-mix.sh` — the sbatch script. Patched with
+- `submit-apertus-data-mix.sh` — the sbatch template. Patched with
   `--dist-ckpt-strictness log_unexpected` (Apr 26) so resumes tolerate older
-  checkpoints' missing TE keys. **Don't revert** without solving the
-  underlying TE/Megatron version skew.
-- `launch_trainings.py` — wrapper that builds the `--export=...` string from
-  `hyperparams_deep.json`. Its default `SEEDS = [28, 64, 1797]` doesn't include
-  seed `1904`, which is what the SNR custom models use. Pass `--seed 1904`
-  explicitly. For non-default `--time`, bypass the launcher and call `sbatch`
-  directly (see commit history of `submit-apertus-data-mix.sh` for the
-  pattern).
+  checkpoints' missing TE keys, and pinned to `#SBATCH --reservation=SD-69241-apertus-1-5`.
+  **Don't revert** the strictness flag without solving the underlying
+  TE/Megatron version skew; **do** drop the reservation line once the
+  reservation expires (currently runs until 11 May 12:00).
+- `launch_trainings.py` — wraps `sbatch --export=…` from `hyperparams_deep.json`.
+  Default `SEEDS = [28, 1797, 1904]` (the canonical SNR set). One sbatch per
+  (size × mix × seed); supports `--dry-run`, `--test`, and the usual filters.
+- `launch_resumes.sh` — **the right entry point for filling gaps**. Reads
+  `pretrain_progress.py`, iterates the canonical 4×3×3 cells, and dispatches
+  per cell: `[done]` → skip · already in `squeue` → skip · `[in_progress]` →
+  resume with auto-computed walltime · `[corrupt]` → wipe `checkpoints/` and
+  submit fresh · `[no_ckpts]` / no exp dir → submit fresh. Idempotent —
+  re-running is safe.
+- `pretrain_progress.py` (this repo at [`scripts/pretrain_progress.py`](scripts/pretrain_progress.py))
+  — also the truth source for the training side. Validates that each
+  `iter_NNNNNNN/` actually contains a `.metadata` file *and* ≥ 1 `.distcp`
+  shard before counting it as resumable. A marker pointing at an iter dir
+  with only `common.pt`/`metadata.json`/`.metadata` (no shards) is flagged
+  `[corrupt] (latest valid: …)` so launchers skip it instead of submitting
+  a doomed resume. We hit this on `175M-fwEdu60-fw240-seed28` on 2026-05-04.
 
 The pretraining checkpoint dir lives at
 `/iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/Meg-Runs/data-mix-small/<EXP_NAME>/checkpoints/`.
 EXP_NAME format: `apertus-${MODEL_SIZE}-fwEdu${FW_EDU_RATIO}-fw2${FW2_RATIO}-seed${SEED}`.
+Slurm job-name format (used by `launch_resumes.sh` for dedup):
+`apertus-${size_lc}-edu${FW_EDU_RATIO}-fw2${FW2_RATIO}-seed${SEED}`.
 
 ---
 
