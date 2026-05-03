@@ -9,10 +9,14 @@
 #   * no-progress ckpts:      12h (full normal-partition cap, default for new ckpts)
 #
 # Usage: bash scripts/launch_ckpts_in_progress.sh [--dry-run] [--filter SUBSTR]
+#                                                 [--reservation RES]
 #
 # --filter SUBSTR restricts to ckpt names containing SUBSTR (passed through
 # to snr_progress.py --filter). Useful for per-seed runs, e.g.
 # `--filter seed1904` to skip seed 28 / 1797 entries entirely.
+#
+# --reservation RES adds `--reservation=RES` to each sbatch (account scope of
+# the reservation must include `infra01`). E.g. `--reservation SD-69241-apertus-1-5`.
 #
 # Per-task minute estimates (logprob-only, since mgsm is no longer in the
 # task list) are coarse averages from observed runs. Adjust if the typical
@@ -22,13 +26,18 @@ cd "$(dirname "$0")/.."
 
 DRY_RUN=0
 FILTER=""
+RESERVATION=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --dry-run) DRY_RUN=1; shift ;;
-        --filter)  FILTER="$2"; shift 2 ;;
+        --dry-run)     DRY_RUN=1; shift ;;
+        --filter)      FILTER="$2"; shift 2 ;;
+        --reservation) RESERVATION="$2"; shift 2 ;;
         *) echo "Unknown flag: $1" >&2; exit 1 ;;
     esac
 done
+
+SBATCH_RES_ARG=()
+[[ -n "$RESERVATION" ]] && SBATCH_RES_ARG=(--reservation="$RESERVATION")
 
 PROGRESS_ARGS=()
 [[ -n "$FILTER" ]] && PROGRESS_ARGS+=(--filter "$FILTER")
@@ -109,7 +118,9 @@ while IFS=' ' read -r status progress name; do
     fi
 
     if (( DRY_RUN )); then
-        echo "would submit  $walltime  $name  ($status, $progress done, $remaining left)"
+        res_note=""
+        [[ -n "$RESERVATION" ]] && res_note=" reservation=$RESERVATION"
+        echo "would submit  $walltime  $name  ($status, $progress done, $remaining left)$res_note"
         submitted=$((submitted + 1))
         continue
     fi
@@ -125,6 +136,7 @@ while IFS=' ' read -r status progress name; do
                  --job-name "eval-$name" \
                  --time "$walltime" \
                  --partition=normal \
+                 "${SBATCH_RES_ARG[@]}" \
                  --export=ALL,CKPT_ITER=$iter \
                  scripts/evaluate.sbatch "$ckpt_path" "$name") \
         || { echo "sbatch FAILED for $name"; skipped=$((skipped + 1)); continue; }
