@@ -23,7 +23,11 @@ export LM_EVAL_BACKEND=${LM_EVAL_BACKEND:-vllm}
 # Force TP=1 — these models all fit on one GPU; DP=GPUS_PER_NODE/TP=4 then
 # gives near-linear throughput on batched loglikelihood scoring (no per-step
 # all-reduce). evaluate.sbatch reads $TP from env (line ~177).
-export TP=${TP:-1}
+# Don't force TP=1 — vLLM rejects offline data_parallel_size>1 for dense
+# models with: "Offline data parallel mode is not supported/useful for dense
+# models." (caused 599/810 splits to fail in the first sweep). Let evaluate.sbatch
+# default to TP=GPUS_PER_NODE=4 (DP=1). Per-node throughput is comparable —
+# 4 GPUs do tensor-parallel inference instead of 4 data-parallel replicas.
 # Run all remaining tasks in ONE lm_eval call per split (rather than one
 # call per task). vLLM model load is the dominant per-task cost on small
 # models, so this ~10x's per-ckpt throughput. _run_per_task.sh implements
