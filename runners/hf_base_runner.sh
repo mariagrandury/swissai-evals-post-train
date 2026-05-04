@@ -73,6 +73,17 @@ for MODEL in "${!MODEL_CHECKPOINTS[@]}"; do
         fi
     fi
 
+    # Also skip if a job with this name (or its split-N siblings) is already
+    # pending/running — prevents duplicate submissions when re-launching after
+    # a partial run (jobs in queue have no results.json yet, so the disk-based
+    # check above doesn't catch them).
+    NAMES_TO_CHECK="eval-$MODEL"
+    for (( s=0; s<NUM_SPLITS; s++ )); do NAMES_TO_CHECK+=",eval-$MODEL-split$s"; done
+    if squeue --me -h -n "$NAMES_TO_CHECK" -t PD,R,CG 2>/dev/null | grep -q .; then
+        echo "  SKIP: $MODEL has pending/running jobs in queue"
+        continue
+    fi
+
     if (( NUM_SPLITS <= 1 )); then
         # Single-node execution (original behavior)
         sbatch --job-name eval-$MODEL \

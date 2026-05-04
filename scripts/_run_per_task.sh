@@ -64,32 +64,57 @@ fi
 
 SUCCESS_DIRS=()
 mapfile -t TASKS_TO_RUN <<< "$REMAINING"
-for t in "${TASKS_TO_RUN[@]}"; do
-    [[ -z "$t" ]] && continue
-    out="$PER_TASK_DIR/$t"
-    echo "=== Running task: $t ==="
-    if $CMD_BASE --tasks "$t" --output_path "$out"; then
-        SUCCESS_DIRS+=("$out")
-        echo "=== OK: $t ==="
+
+# BATCH_TASKS=1 (set by the vLLM/HF SNR runner): run ALL remaining tasks in
+# ONE lm_eval invocation. vLLM model load is the dominant per-task cost
+# (~30-90s) and dwarfs actual inference on small models, so a single call
+# ~10x's per-ckpt throughput. lm_eval handles per-task errors internally
+# (logs and moves on within the run). The single results_*.json is recognized
+# by _eval_status.py's `.results` listing, so per-task idempotency on re-runs
+# still works. Trade-off: a mid-run crash loses all unwritten results in
+# that call (vs the per-task loop's "lose only the in-progress task").
+if [[ "${BATCH_TASKS:-0}" == "1" ]]; then
+    TASKS_CSV=$(IFS=,; echo "${TASKS_TO_RUN[*]}")
+    echo "=== Running ${#TASKS_TO_RUN[@]} tasks in a single lm_eval call (BATCH_TASKS=1) ==="
+    if $CMD_BASE --tasks "$TASKS_CSV" --output_path "$HARNESS_EVAL_DIR"; then
+        SUCCESS_DIRS+=("$HARNESS_EVAL_DIR")
+        echo "=== OK: batch of ${#TASKS_TO_RUN[@]} tasks ==="
     else
         rc=$?
-        echo "$t" >> "$FAILED_LOG"
-        echo "=== FAILED (rc=$rc): $t — logged and continuing ===" >&2
+        printf '%s\n' "${TASKS_TO_RUN[@]}" >> "$FAILED_LOG"
+        echo "=== FAILED (rc=$rc): batch lm_eval call — see $FAILED_LOG ===" >&2
     fi
-done
+else
+    for t in "${TASKS_TO_RUN[@]}"; do
+        [[ -z "$t" ]] && continue
+        out="$PER_TASK_DIR/$t"
+        echo "=== Running task: $t ==="
+        if $CMD_BASE --tasks "$t" --output_path "$out"; then
+            SUCCESS_DIRS+=("$out")
+            echo "=== OK: $t ==="
+        else
+            rc=$?
+            echo "$t" >> "$FAILED_LOG"
+            echo "=== FAILED (rc=$rc): $t — logged and continuing ===" >&2
+        fi
+    done
+fi
 
 if (( ${#SUCCESS_DIRS[@]} == 0 )); then
     echo "ERROR: every attempted task failed; nothing to merge or upload." >&2
     exit 1
 fi
 
-echo "Merging ${#SUCCESS_DIRS[@]} successful task dirs into $HARNESS_EVAL_DIR"
-python -m scripts.alignment.merge_split_results \
-    --split_dirs "${SUCCESS_DIRS[@]}" \
-    --output_dir "$HARNESS_EVAL_DIR"
-
-# Drop the per-task scratch; merged outputs live at $HARNESS_EVAL_DIR root.
-rm -rf "$PER_TASK_DIR"
+# In BATCH_TASKS mode the single lm_eval call already wrote results_*.json
+# directly into $HARNESS_EVAL_DIR, so the per-task merge step is unnecessary
+# (and would be a no-op anyway since SUCCESS_DIRS == [$HARNESS_EVAL_DIR]).
+if [[ "${BATCH_TASKS:-0}" != "1" ]]; then
+    echo "Merging ${#SUCCESS_DIRS[@]} successful task dirs into $HARNESS_EVAL_DIR"
+    python -m scripts.alignment.merge_split_results \
+        --split_dirs "${SUCCESS_DIRS[@]}" \
+        --output_dir "$HARNESS_EVAL_DIR"
+    rm -rf "$PER_TASK_DIR"
+fi
 
 if [[ -s "$FAILED_LOG" ]]; then
     echo "WARNING: $(wc -l < "$FAILED_LOG") task(s) failed (see $FAILED_LOG):"
