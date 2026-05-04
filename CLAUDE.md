@@ -116,6 +116,36 @@ Apertus 8B/70B intentionally use `main` (HF latest) because the user wants the
 shipped model rather than a specific intermediate step. Never change to
 `step<N>-tokens<M>B` without confirming.
 
+### Local-HF (vLLM-on-converted-megatron) runner
+
+[`runners/snr_pretraining_local_hf.sh`](runners/snr_pretraining_local_hf.sh)
+— evaluates the **converted** SNR ckpts (Megatron → HF) staged at
+`/iopsstor/scratch/cscs/mariagrandury/snr-hf-checkpoints/<cell>/iter_NNNNNNN/`.
+Walks that tree, builds `MODEL_CHECKPOINTS` with one entry per (cell, iter),
+then sources `hf_base_runner.sh`. Why prefer this over the megatron path:
+
+- vLLM is faster and dramatically more memory-efficient than the megatron
+  eval path, which had ~196 jobs FAIL with cgroup memory pressure on the
+  May-3 / May-4 megatron sweep (per `sacct` audit).
+- Local paths skip the HF Hub round-trip — no 429 risk during eval (see
+  bug history #12), no GB-scale model downloads.
+- Sets `BATCH_TASKS=1` (see bug history #13) and lets `TP` default to
+  `GPUS_PER_NODE` (see bug history #11 — DO NOT override `TP=1`).
+- `SEEDS_FILTER` env var (default `"1904 1797 28"`) restricts which seeds
+  to evaluate. Set `SEEDS_FILTER="1797 28"` to skip seed1904 (most of which
+  already has megatron eval results from the May-3 megatron sweep).
+
+Submit through the standard launcher:
+```bash
+bash scripts/launch_evaluations.sh snr-pretraining-full \
+    --script runners/snr_pretraining_local_hf.sh --time 02:00:00 --splits 4
+```
+
+The `hf_base_runner.sh` skip logic now does TWO checks per ckpt: (a) disk
+results.json lists all tasks → skip; (b) `squeue --me -n eval-$MODEL,…-split0,…`
+returns any pending/running job → skip. The latter prevents duplicate
+submissions when re-launching after a partial run.
+
 ---
 
 ## Task list
@@ -355,6 +385,187 @@ render as bars while same-task multi-ckpt runs (175M-fwEdu*) render as
 lines. Not a bug — just data sparsity. The custom workspace view built
 by the `wandb-workspaces` script forces `LinePlot` with `range_y=(0,1)`
 regardless of point count, side-stepping the auto-pick.
+
+### 11. vLLM rejects offline `data_parallel_size > 1` for dense models
+Setting `TP=1` so `DP=GPUS_PER_NODE/TP=4` (the comment in `evaluate.sbatch:177`
+recommends this for small models) fails on every dense Apertus model with:
+
+```
+RuntimeError: Worker 0 failed during generation:
+ValidationError: 1 validation error for ParallelConfig
+  Value error, Offline data parallel mode is not supported/useful for dense models.
+```
+
+vLLM only allows offline DP for MoE models. On 2026-05-04 this killed
+599/810 splits in the first vLLM SNR sweep. **Use the default `TP=$GPUS_PER_NODE`
+(=4) for dense models** — all 4 GPUs do tensor-parallel inference instead.
+Per-node throughput is similar; parallelism comes from `--splits K` (one
+sbatch per task chunk), not from offline DP. The comment in `evaluate.sbatch`
+about overriding `TP=1` is **stale for vLLM dense** — if you want to revisit,
+test with one ckpt before fanning out.
+
+### 12. HF Hub team plan caps at 3000 API requests / 5 minutes
+The huggingface_hub team plan (current state on this account) imposes a
+hard rate limit. Burst pushes / queries blow through it fast:
+- `push-snr.py` pushing 240 iter dirs back-to-back hit it after ~6 cells
+  and the per-call retry exhausted (each `upload_folder` does multiple
+  internal API calls).
+- `convert-snr.sh` fetching `alehc/swissai-tokenizer` for every iter
+  triggered it during a 63-iter conversion (Megatron's `HuggingFaceTokenizer`
+  + the saver each fetch the tokenizer once per iter).
+
+Mitigations in place:
+- `push-snr.py` has 429-aware backoff (`_retry_on_429` parses `Retry-After`
+  + has exponential fallback) — works for moderate bursts, exhausts on
+  long sweeps.
+- `convert-snr.sh` exports `HF_HUB_OFFLINE=1` + `HF_HUB_CACHE` pointing at
+  `/capstor/store/cscs/swissai/infra01/users/mariagrandury/hf_models/`
+  (where the tokenizer is pre-cached) so per-iter conversion never hits
+  the API.
+
+For a long push sweep, expect ~6-10 cells per 5-min window — wait for the
+window to clear before retrying. Or split the push across two rate-limit
+windows by sleeping 5 min between batches.
+
+### 13. `_run_per_task.sh` reloads vLLM 86 times per ckpt (BATCH_TASKS toggle)
+The default per-task loop calls `lm_eval --tasks "$t"` once per task. vLLM
+model load is the dominant cost (~30-90s per load on small models),
+dwarfing actual inference time. For a 86-task `snr-pretraining-full` sweep,
+this is ~2 hours of pure model-load overhead per ckpt.
+
+Set `BATCH_TASKS=1` (env var threaded through `evaluate.sbatch` →
+`_run_per_task.sh`) to run ALL remaining tasks in ONE `lm_eval` call. Model
+loads once, all tasks share it. ~10x per-ckpt speedup. Trade-off: a mid-
+run crash loses unwritten task results in that call (vs the per-task
+loop's "lose only the in-progress task"); the per-task idempotency on re-
+run still works because the single `results_*.json` lists all tasks under
+`.results`.
+
+The vLLM/HF SNR runner ([`runners/snr_pretraining_local_hf.sh`](runners/snr_pretraining_local_hf.sh))
+sets `BATCH_TASKS=1` by default. Megatron path keeps the per-task loop
+(safer given megatron eval's known cgroup/memory fragility — see bug 11
+context).
+
+**`BATCH_TASKS=1` rescue gotcha (2026-05-04):** in batched mode, lm_eval
+instantiates EVERY task in `--tasks` upfront — calling `download()` for each
+dataset — BEFORE any token is generated. If any one of those `download()`
+calls fails, the whole call dies with zero tasks evaluated and zero
+`samples_*.jsonl` written, even though many tasks "loaded successfully"
+beforehand. So "the loop got past task X" is not a signal that any task
+ran — it's only a signal that those datasets exist and parse. We hit
+exactly this on 2026-05-04 with the `mlqa.py` dataset-script removal (bug
+15 below); 36 jobs spent 22 minutes loading 109 datasets, then `mlqa`
+crashed the call → 0 generations across all 36.
+
+For partial-result rescue:
+- per-task mode (`BATCH_TASKS=0`, default) — each completed task's
+  `eval_*/per_task/<task>/results.json` survives walltime kills; only the
+  in-flight task is lost. `push_all_results.py` aggregates these.
+- batched mode (`BATCH_TASKS=1`) — `samples_*.jsonl` per task lands as each
+  task finishes (because of `--log_samples`), but the unifying
+  `results_*.json` is only written at the very end. Walltime mid-batch
+  ⇒ the samples files exist but no aggregated metrics; you'd need a custom
+  script to compute scores from samples (none in repo today). For
+  long-running sweeps where walltime is tight, prefer `BATCH_TASKS=0`.
+
+---
+
+### 14. vLLM `tensor_parallel_size` must divide `num_key_value_heads`
+vLLM rejects model load with:
+
+```
+assert self.total_num_kv_heads % tp_size == 0
+AssertionError
+```
+
+This kills the worker process before any inference. For the SNR Apertus
+sizes (HF-converted checkpoints under
+`/iopsstor/scratch/cscs/mariagrandury/snr-hf-checkpoints/`), the GQA
+counts are:
+
+| Size | num_attention_heads | num_key_value_heads | Valid TP |
+|---|---:|---:|---|
+| 175M | 16 | 4 | 1, 2, 4 |
+| 350M | 20 | 5 | **1 only** |
+| 600M | 24 | 6 | 1, 2 |
+| 1B   | 28 | 7 | **1 only** |
+
+`evaluate.sbatch:177` defaults `MP=$GPUS_PER_NODE=4`, which **only works
+for 175M**. We hit this on 2026-05-04 — 31 of 36 eval jobs (the 350M /
+600M-with-TP=4 / 1B cases) all failed at vLLM `WorkerProc` init.
+
+The fix at launch time is to set `TP` per-size in the `--export=` line of
+`sbatch`, e.g.:
+```bash
+case $size in
+  175M) tp=4 ;;
+  350M) tp=1 ;;
+  600M) tp=2 ;;
+  1B)   tp=1 ;;
+esac
+sbatch ... --export=ALL,TP=$tp,...
+```
+
+`runners/snr_pretraining_local_hf.sh` does NOT do this today (it lets
+`MP` default), so launching the SNR sweep through that runner fails for
+all non-175M cells. Either add a per-cell TP map to that runner, or use
+the inline submission loop from this bug entry's launch pattern. (For
+larger models that don't fit on one GPU, TP must be ≥ ceil(model_size /
+single_gpu_mem) anyway, but for SNR sizes a single GPU is plenty.)
+
+---
+
+### 15. `datasets` v3+ removed support for script-based dataset loaders
+The eval container's `datasets` library version no longer loads HF
+datasets that ship a `<repo>.py` script (the legacy "dataset script"
+format). Symptom inside lm_eval task instantiation:
+
+```
+RuntimeError: Dataset scripts are no longer supported, but found mlqa.py
+```
+
+This kills the entire `lm_eval` call (in batched mode, all 36 jobs
+in flight; in per-task mode, just that one task). On 2026-05-04 this hit
+during the `tasks_pretraining_full.txt` load of `mlqa*` and several other
+script-only datasets.
+
+**Fix**: prune any remaining script-format tasks from
+`configs/signal_to_ratio/tasks_pretraining_full.txt`. To audit, look up
+each task's HF dataset repo and check whether it contains `*.py` (legacy)
+vs the parquet/json data-only layout (modern). A datasets-side pin to
+`<3.0` could also work but conflicts with other deps; pruning is cleaner.
+On 2026-05-04 the user trimmed every entry from `mlqa` onward (109 → 83
+tasks).
+
+---
+
+### 16. `HF_HUB_CACHE` doesn't propagate into the eval container
+`HF_HOME` and `HF_HUB_CACHE` set on the host shell (e.g. by the user's
+conda env init) are NOT visible inside `srun --environment=...` (per bug
+5). If `evaluate.sbatch` doesn't explicitly thread them through
+`INNER_EXPORTS`, the container starts with the default in-image cache
+(`/root/.cache/huggingface`), forcing every job to re-download tokenizer
++ datasets — which is what triggered the 2026-05-04 HF 429 cascade
+(bug 12).
+
+The populated cache lives at
+`/capstor/store/cscs/swissai/infra01/users/$USER/hf_models` (~258 GB,
+already mounted in both `containers/env.toml` and
+`containers/env_vllm.toml`). `evaluate.sbatch` now defaults to it and
+forwards both vars via `INNER_EXPORTS`:
+
+```bash
+export HF_HOME=${HF_HOME:-/iopsstor/scratch/cscs/$USER/hf_home}
+export HF_HUB_CACHE=${HF_HUB_CACHE:-/capstor/store/cscs/swissai/infra01/users/$USER/hf_models}
+INNER_EXPORTS="export ... HF_HOME='$HF_HOME' HF_HUB_CACHE='$HF_HUB_CACHE'"
+```
+
+Without these two lines, expect a 429 cascade the next time you launch
+>10 concurrent eval jobs. To pre-warm a missing model/dataset, run from
+the `snr` conda env on the login node:
+```bash
+hf download <repo>          # respects $HF_HUB_CACHE from the env
+```
 
 ---
 
