@@ -27,8 +27,7 @@ Two parallel tracks at any given time:
    Resume jobs are managed via
    [`pretrain/megatron/data-mix-small/launch_resumes.sh`](../pretrain/megatron/data-mix-small/launch_resumes.sh),
    which is idempotent (skips cells that already have a queued/running job by
-   matching the canonical Slurm name) and runs against the
-   `SD-69241-apertus-1-5` reservation. Live status comes from
+   matching the canonical Slurm name). Live status comes from
    [`scripts/pretrain_progress.py`](scripts/pretrain_progress.py) — see
    "Pretraining infrastructure" below.
 
@@ -696,7 +695,7 @@ read it for the training-side gotchas. Quick orientation:
 
 - `submit-apertus-data-mix.sh` — the sbatch template. Patched with
   `--dist-ckpt-strictness log_unexpected` (Apr 26) so resumes tolerate older
-  checkpoints' missing TE keys, and pinned to `#SBATCH --reservation=SD-69241-apertus-1-5`.
+  checkpoints' missing TE keys.
   **Don't revert** the strictness flag without solving the underlying
   TE/Megatron version skew; **do** drop the reservation line once the
   reservation expires (currently runs until 11 May 12:00).

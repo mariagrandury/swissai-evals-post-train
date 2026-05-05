@@ -15,9 +15,6 @@
 # to snr_progress.py --filter). Useful for per-seed runs, e.g.
 # `--filter seed1904` to skip seed 28 / 1797 entries entirely.
 #
-# --reservation RES adds `--reservation=RES` to each sbatch (account scope of
-# the reservation must include `infra01`). E.g. `--reservation SD-69241-apertus-1-5`.
-#
 # Per-task minute estimates (logprob-only, since mgsm is no longer in the
 # task list) are coarse averages from observed runs. Adjust if the typical
 # task mix changes again.
