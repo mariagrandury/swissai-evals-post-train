@@ -35,7 +35,7 @@ Scripts:
 On the cluster (so Megatron paths resolve):
 
 ```bash
-cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train && git pull
+cd /iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/evals && git pull
 
 # Pretraining (Megatron) - N evenly-spaced iters across each run
 bash scripts/generate_snr_runner.sh \
@@ -221,13 +221,13 @@ Where `<model_name>` is:
 
 ```bash
 # Tail the latest log across all eval jobs
-cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/logs/ && ls -t eval-*.out | head -1 | xargs tail -100
+cd /iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/evals/logs/ && ls -t eval-*.out | head -1 | xargs tail -100
 
 # Tail a specific model
-cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/logs/ && tail -100 eval-SmolLM3-3B-checkpoints-stage3-step-4720000_1831506.out
+cd /iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/evals/logs/ && tail -100 eval-SmolLM3-3B-checkpoints-stage3-step-4720000_1831506.out
 
 # Errors only — latest .err across all eval jobs
-cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/logs/ && ls -t eval-*.err | head -1 | xargs tail -100
+cd /iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/evals/logs/ && ls -t eval-*.err | head -1 | xargs tail -100
 ```
 
 ### Harness + W&B logs (per checkpoint)
@@ -272,7 +272,7 @@ squeue --me --noheader -o "%.10i %.30j %.2t %.10M %.6D %R" | grep eval-
 Tail the latest failing job:
 
 ```bash
-cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train/logs/ && ls -t eval-*.err | head -1 | xargs tail -60
+cd /iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/evals/logs/ && ls -t eval-*.err | head -1 | xargs tail -60
 ```
 
 Sanity-check a generated runner before submitting:
@@ -323,7 +323,7 @@ Merge the surviving dirs and re-upload to W&B (one-shot, runs anywhere
 the repo is checked out — no Slurm needed):
 
 ```bash
-cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train
+cd /iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/evals
 
 python -m scripts.alignment.merge_split_results \
     --split_dirs "$EVAL_DIR"/per_task/*/ \

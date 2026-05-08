@@ -22,10 +22,10 @@ Two parallel tracks at any given time:
    (per-model curve, one step per ckpt — see "W&B layout" below).
 
 2. **Pretraining of half-finished custom models** (separate repo at
-   `/iopsstor/scratch/cscs/mariagrandury/pretrain/megatron/data-mix-small`).
+   `/iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/pretrain`).
    The full sweep now spans **3 seeds** (28, 1797, 1904) — 36 models total.
    Resume jobs are managed via
-   [`pretrain/megatron/data-mix-small/launch_resumes.sh`](../pretrain/megatron/data-mix-small/launch_resumes.sh),
+   [`/iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/pretrain/launch_resumes.sh`](/iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/pretrain/launch_resumes.sh),
    which is idempotent (skips cells that already have a queued/running job by
    matching the canonical Slurm name). Live status comes from
    [`scripts/pretrain_progress.py`](scripts/pretrain_progress.py) — see
@@ -162,7 +162,7 @@ If a task fails, the per-task fault-tolerance in `_run_per_task.sh` logs them an
 ## The one-liner workflow (idempotent, multi-collaborator-safe)
 
 ```bash
-cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train && git pull && \
+cd /iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/evals && git pull && \
 bash scripts/launch_evaluations.sh snr-pretraining-full \
     --script runners/snr_pretraining_all.sh --time 12:00:00
 ```
@@ -221,8 +221,8 @@ setfacl -m u:$USER_TO_ADD:rx /iopsstor/scratch/cscs/mariagrandury \
     /iopsstor/scratch/cscs/mariagrandury/data-mix-small \
     /iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM \
     /iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs
-setfacl -R -m u:$USER_TO_ADD:rwx /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train
-setfacl -R -d -m u:$USER_TO_ADD:rwx /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train
+setfacl -R -m u:$USER_TO_ADD:rwx /iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/evals
+setfacl -R -d -m u:$USER_TO_ADD:rwx /iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/evals
 setfacl -R -m u:$USER_TO_ADD:rwx /iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/eval_logs
 setfacl -R -d -m u:$USER_TO_ADD:rwx /iopsstor/scratch/cscs/mariagrandury/data-mix-small/Megatron-LM/logs/eval_logs
 ```
@@ -232,7 +232,7 @@ Each colleague needs their **own** `HF_TOKEN` and `WANDB_API_KEY` exported
 W&B key needs membership in `mariagrandury-epflnlp` entity.
 
 ```bash
-export HF_TOKEN=<your_hf_token> WANDB_API_KEY=<your_wandb_key> && cd /iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train && git pull && bash scripts/launch_evaluations.sh snr-pretraining-full --script runners/snr_pretraining_all.sh --time 12:00:00
+export HF_TOKEN=<your_hf_token> WANDB_API_KEY=<your_wandb_key> && cd /iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/evals && git pull && bash scripts/launch_evaluations.sh snr-pretraining-full --script runners/snr_pretraining_all.sh --time 12:00:00
 ```
 
 ---
@@ -297,7 +297,7 @@ decoder.layers.self_attention.q_layernorm._extra_state/...`. Fix: pass
 metadata is skipped, which is irrelevant for bf16 eval.
 
 The same fix is in the **training** repo's
-`pretrain/megatron/data-mix-small/submit-apertus-data-mix.sh` (we patched it
+`/iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/pretrain/submit-apertus-data-mix.sh` (we patched it
 when launching the resume jobs). If you regenerate that file from upstream,
 re-apply.
 
@@ -568,6 +568,42 @@ hf download <repo>          # respects $HF_HUB_CACHE from the env
 
 ---
 
+### 17. Long-sleeping `nohup` submitters capture the OLD repo path
+`scripts/submit_175M_topup_delayed.sh` (and any similar one-shot delayed
+submitter) does `cd "$(dirname "$0")/.."` then sets
+`TASKS_FILE=$PWD/configs/...` early, then `sleep 28800` (8 h) before
+submitting. If the repo is moved or deleted during the sleep window, the
+captured `$PWD` (and therefore `TASKS_FILE`) still points at the old
+location — the submitted jobs then fail in two flavors:
+
+- `srun: error: pyxis: --environment: failed to open './containers/env_vllm.toml': No such file or directory`
+  (the slurm CWD is the dead old repo path, so the relative `./containers/...`
+  in `evaluate.sbatch` fails to resolve; jobs die in ~15-25 s).
+- `ValueError: Tasks not found: /old/path/.../tasks_pretraining_full.txt`
+  (the absolute `TASKS` env points at the dead path; lm-eval can't find
+  the file → fails in ~1:30 after container startup).
+
+We hit both on 2026-05-06 when the repo moved from
+`/iopsstor/scratch/cscs/mariagrandury/swissai-evals-post-train` to
+`/iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/evals`.
+Roughly 30 jobs (2047059–2050368) failed for these reasons even though
+all the code in the new tree was correct — the failing jobs were
+submitted by a `nohup`'d delayed-launcher process that had captured the
+old path before the move.
+
+Mitigations:
+- **Before moving/renaming the repo**, kill any long-sleeping submitters:
+  `pgrep -af "submit_.*delayed|nohup.*launch_eval" | awk '{print $1}' | xargs -r kill`.
+- **Defensive guard in delayed scripts**: re-validate `[[ -f "$TASKS_FILE" ]]`
+  right before each `sbatch` call, and abort the loop with a clear error
+  if missing. This is cheap (one stat) and turns a silent 30-job failure
+  into a single explicit message.
+- Prefer absolute paths derived from a *resolved* canonical location
+  (e.g. `realpath`) rather than the script's `$PWD`, so a moved repo is
+  caught at `realpath` time rather than at job-submit time.
+
+---
+
 ## Smoke tests (when you change `evaluate.sbatch` / `_run_per_task.sh`)
 
 Use the four committed smoke tests in
@@ -688,9 +724,9 @@ on the cluster.
 
 ## Pretraining infrastructure (separate repo)
 
-`/iopsstor/scratch/cscs/mariagrandury/pretrain/megatron/data-mix-small/` is
+`/iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/pretrain/` is
 the training submitter. There's a back-of-house memo over there at
-[`pretrain/megatron/data-mix-small/CLAUDE.md`](../pretrain/megatron/data-mix-small/CLAUDE.md);
+[`/iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/pretrain/CLAUDE.md`](/iopsstor/scratch/cscs/mariagrandury/snr-multilingual/src/pretrain/CLAUDE.md);
 read it for the training-side gotchas. Quick orientation:
 
 - `submit-apertus-data-mix.sh` — the sbatch template. Patched with

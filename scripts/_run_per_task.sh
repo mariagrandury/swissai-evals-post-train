@@ -116,6 +116,24 @@ if [[ "${BATCH_TASKS:-0}" != "1" ]]; then
     rm -rf "$PER_TASK_DIR"
 fi
 
+# Flatten any sanitized-model subdir that lm_eval's vLLM backend creates.
+# vLLM writes results to <output_path>/<sanitized_model_path>/, while the
+# megatron_lm backend writes them directly to <output_path>/. Flattening
+# here unifies the two layouts so downstream tooling (push_all_results.py,
+# build_hf_dataset.py, _eval_status.py) can rely on a single shape.
+shopt -s nullglob
+for inner in "$HARNESS_EVAL_DIR"/*/; do
+    base=$(basename "$inner")
+    [[ "$base" == "per_task" ]] && continue
+    # Only flatten if it actually contains a results_*.json (defensive guard).
+    if compgen -G "$inner"/results_*.json > /dev/null; then
+        echo "Flattening lm_eval subdir: $base/"
+        mv "$inner"/* "$HARNESS_EVAL_DIR"/ 2>/dev/null
+        rmdir "$inner" 2>/dev/null || echo "  warn: $inner not empty after flatten"
+    fi
+done
+shopt -u nullglob
+
 if [[ -s "$FAILED_LOG" ]]; then
     echo "WARNING: $(wc -l < "$FAILED_LOG") task(s) failed (see $FAILED_LOG):"
     sed 's/^/  - /' "$FAILED_LOG"

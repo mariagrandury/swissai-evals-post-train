@@ -703,8 +703,8 @@ configs:
 # SwissAI Evals — SNR Experiments
 
 Aggregate evaluation results for the SwissAI signal-to-noise (SNR) study.
-Results were produced by [swissai-evals-post-train](https://github.com/swiss-ai/swissai-evals-post-train)
-on top of [lm-evaluation-harness](https://github.com/swiss-ai/lm-evaluation-harness).
+Results were produced by the SwissAI multilingual SNR pipeline on top of
+[lm-evaluation-harness](https://github.com/swiss-ai/lm-evaluation-harness).
 
 The schema mirrors [allenai/signal-and-noise](https://huggingface.co/datasets/allenai/signal-and-noise):
 one row per `(model, model_revision, task)` with aggregate metrics only — no

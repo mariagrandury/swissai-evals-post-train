@@ -59,7 +59,7 @@ ENTITY = "mariagrandury-epflnlp"
 PROJECT = "snr-experiments"
 
 # --- Tokens-per-step lookup tables ---------------------------------------
-# Megatron training config (see pretrain/megatron/data-mix-small/submit-apertus-data-mix.sh):
+# Megatron training config (see ../../pretrain/submit-apertus-data-mix.sh):
 # global_batch_size = 504, sequence_length = 4096
 MEG_TOKENS_PER_ITER = 504 * 4096  # ≈ 2.064 M
 

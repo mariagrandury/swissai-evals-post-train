@@ -197,7 +197,22 @@ export HF_ALLOW_CODE_EVAL=1
 
 # Finally, run the actual evaluations.
 HF_CHECKPOINT_PATH=$MODEL
-DP=$(( GPUS_PER_NODE / MP ))
+# Pipeline parallel: complements TP when TP can't fully use the node (e.g. SNR
+# 350M kv=5 → TP=1 ⇒ PP=4 to fill 4 GPUs; 600M kv=6 → TP=2 ⇒ PP=2; 1B kv=7
+# → TP=1 ⇒ PP=4; 175M kv=4 → TP=4 ⇒ PP=1). PP has no kv_heads constraint, just
+# needs num_hidden_layers % PP == 0. Default 1 (= no PP). See CLAUDE.md bug 14.
+PP=${PP:-1}
+# vLLM rejects offline data_parallel_size>1 for dense models with
+# "Offline data parallel mode is not supported/useful for dense models."
+# (CLAUDE.md bug 11). When TP*PP < GPUS_PER_NODE the leftover GPUs are idle —
+# DP would have absorbed them historically, but since vLLM dropped offline DP
+# we clamp it to 1. To use all 4 GPUs, pick TP and PP per-size at submit time.
+DP=$(( GPUS_PER_NODE / (MP * PP) ))
+if [[ "$LM_EVAL_BACKEND" == "vllm" && "$DP" -gt 1 ]]; then
+    leftover=$(( GPUS_PER_NODE - MP * PP ))
+    echo "vLLM dense models reject offline DP>1; clamping data_parallel_size=1 (TP=$MP PP=$PP, $leftover GPU(s) idle)"
+    DP=1
+fi
 COMMON_MODEL_ARGS="dtype=bfloat16"
 if [[ $BOS = true ]]; then
 	echo "Adding BOS token."
@@ -221,7 +236,7 @@ VLLM_MEMORY_FRACTION=0.75
 # export VLLM_DISABLE_CUSTOM_ALL_REDUCE=1
 
 if [[ $LM_EVAL_BACKEND == "vllm" ]]; then
-    COMMON_MODEL_ARGS="$COMMON_MODEL_ARGS,pretrained=$HF_CHECKPOINT_PATH,tokenizer=$TOKENIZER$MAYBE_REVISION${MAYBE_TOKENIZER_REVISION:-},data_parallel_size=$DP,tensor_parallel_size=$MP,gpu_memory_utilization=$VLLM_MEMORY_FRACTION,enable_thinking=False"
+    COMMON_MODEL_ARGS="$COMMON_MODEL_ARGS,pretrained=$HF_CHECKPOINT_PATH,tokenizer=$TOKENIZER$MAYBE_REVISION${MAYBE_TOKENIZER_REVISION:-},data_parallel_size=$DP,tensor_parallel_size=$MP,pipeline_parallel_size=$PP,gpu_memory_utilization=$VLLM_MEMORY_FRACTION,enable_thinking=False"
 elif [[ $LM_EVAL_BACKEND == "megatron_lm" ]]; then
     # `--dist-ckpt-strictness=log_unexpected` tells Megatron's distributed
     # checkpoint loader to log (instead of raise) on missing keys like
